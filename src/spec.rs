@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+const IMPLICIT_FORWARD_PREFIX: &str = "implicit-forward";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalSpec {
     pub name: String,
@@ -54,6 +56,10 @@ fn ssh_service_name(
     )
 }
 
+fn implicit_forward_name(index: usize) -> String {
+    format!("{IMPLICIT_FORWARD_PREFIX}-{index}")
+}
+
 impl LocalSpec {
     fn looks_like_ssh(parts: &[&str]) -> bool {
         matches!(parts, [listen_port, _, _] if is_candidate_port(listen_port))
@@ -89,6 +95,31 @@ impl LocalSpec {
             },
             _ => Err(Error::Usage(
                 "ssh-style local specs must be [bind_address:]port:host:hostport".into(),
+            )),
+        }
+    }
+
+    pub fn parse_listen(input: &str, index: usize) -> Result<Self> {
+        if input.contains('[') || input.contains(']') {
+            return Err(Error::Usage("IPv6 specifiers are not supported yet".into()));
+        }
+
+        let parts: Vec<_> = input.split(':').collect();
+        match parts.as_slice() {
+            [listen_port] => Ok(Self {
+                name: implicit_forward_name(index),
+                local_listen_port: Some(parse_port(listen_port)?),
+                remote_connect_port: None,
+                bind_interface: None,
+            }),
+            [bind_interface, listen_port] if !bind_interface.is_empty() => Ok(Self {
+                name: implicit_forward_name(index),
+                local_listen_port: Some(parse_port(listen_port)?),
+                remote_connect_port: None,
+                bind_interface: Some((*bind_interface).to_string()),
+            }),
+            _ => Err(Error::Usage(
+                "listen specs must be port or bind_address:port".into(),
             )),
         }
     }
@@ -146,7 +177,7 @@ impl LocalSpec {
                             return Err(Error::Usage(
                                 "local spec only accepts remote-connect= and bind=".into(),
                             ));
-                        }
+                        },
                     }
                 }
                 Ok(Self {
@@ -196,6 +227,23 @@ impl RemoteSpec {
             _ => Err(Error::Usage(
                 "ssh-style remote specs must be [bind_address:]port:host:hostport".into(),
             )),
+        }
+    }
+
+    pub fn parse_connect(input: &str, index: usize) -> Result<Self> {
+        if input.contains('[') || input.contains(']') {
+            return Err(Error::Usage("IPv6 specifiers are not supported yet".into()));
+        }
+
+        let parts: Vec<_> = input.split(':').collect();
+        match parts.as_slice() {
+            [connect_host, connect_port] if !connect_host.is_empty() => Ok(Self {
+                name: implicit_forward_name(index),
+                local_connect_port: Some(parse_port(connect_port)?),
+                remote_listen_port: None,
+                connect_address: Some((*connect_host).to_string()),
+            }),
+            _ => Err(Error::Usage("connect specs must be host:port".into())),
         }
     }
 
@@ -252,7 +300,7 @@ impl RemoteSpec {
                             return Err(Error::Usage(
                                 "remote spec only accepts listen= and address=".into(),
                             ));
-                        }
+                        },
                     }
                 }
                 Ok(Self {

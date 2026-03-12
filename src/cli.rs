@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::{
@@ -10,45 +10,29 @@ use crate::{
 const FOWL_LONG_ABOUT: &str = "\
 Create a TCP port forward between two terminals over a magic-wormhole session.
 
-One side usually starts with -R to allocate a code. The other side joins with
-that code and a matching -L rule. Matching forward declarations are still
-required on both peers.";
+Top-level `fowl ...` is the one-off path.
+`fowl tunnel up ...` is the persistent tunnel path.
+
+One side provides `--listen` and the peer provides `--connect`. SSH-style
+`-L` and `-R` remain supported as compatibility syntax.";
 
 const FOWL_AFTER_HELP: &str = "\
 Examples:
-  Named fowl-style forward, terminal 1 allocates a code and exposes the peer's
-  local web server on port 7000:
-    fowl -R web:9000:listen=7000
+  One-off forward, connector side allocates a code:
+    fowl --connect localhost:22
 
-  Terminal 2 joins that code and agrees to the same logical forward:
-    fowl -L web:7000:remote-connect=9000 7-cobalt-signal
+  Matching one-off peer listens locally with that code:
+    fowl --listen 127.0.0.1:9000 7-cobalt-signal
 
-  SSH-style syntax for the same job, terminal 1:
-    fowl -R 7000:127.0.0.1:9000
+  Persistent tunnel, creator side allocates a reusable code:
+    fowl tunnel up --connect localhost:22
 
-  SSH-style syntax for the matching peer, terminal 2:
-    fowl -L 7000:127.0.0.1:9000 7-cobalt-signal
+  Persistent tunnel, join side reuses that code:
+    fowl tunnel up --listen 127.0.0.1:9000 --code 7-cobalt-signal
 
-  Bind the local listener to a specific interface:
-    fowl -L web:7000:remote-connect=9000:bind=0.0.0.0 7-cobalt-signal
-
-  Persistent mode, creator side, omit the code to allocate the stable code:
-    fowl --persistent -L 7000:127.0.0.1:9000
-
-  Persistent mode, join side, reuse the printed code:
-    fowl --persistent -R 7000:127.0.0.1:9000 7-cobalt-signal
-
-  The side that starts without a code becomes the creator. The side that starts
-  with the printed code becomes the joiner, regardless of `-L` or `-R`.
-
-  After a crash or reboot, rerun the same persistent command on either side.
-  `fowl` will find the saved state in `./.fowl/` first, then the per-user state
-  directory, and hand off to the reconnecting daemon again.
-
-Notes:
-  - Omit CODE to allocate a new code and print it.
-  - Provide CODE to join an existing session.
-  - Both peers must still provide corresponding -L and -R rules.";
+  SSH-style compatibility syntax still works for one-off flows:
+    fowl -R 9000:localhost:22
+    fowl -L 9000:localhost:22 7-cobalt-signal";
 
 #[derive(Debug, Clone)]
 pub struct FowlConfig {
@@ -61,17 +45,21 @@ pub struct FowlConfig {
     pub state: Option<PathBuf>,
 }
 
-#[derive(Debug, Parser)]
-#[command(name = "fowl")]
-#[command(about = "Create a TCP forward over a magic-wormhole session")]
-#[command(long_about = FOWL_LONG_ABOUT)]
-#[command(after_long_help = FOWL_AFTER_HELP)]
-#[command(version)]
-pub struct FowlCli {
-    #[arg(long = "mailbox", help = "Override the mailbox websocket URL")]
-    pub mailbox: Option<String>,
-    #[arg(long = "code-length", default_value_t = 2, help = "Number of words to allocate when creating a new code")]
-    pub code_length: usize,
+#[derive(Debug, Clone)]
+pub struct TunnelStatusConfig {
+    pub code: Option<String>,
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FowlInvocation {
+    Run(FowlConfig),
+    TunnelUp(FowlConfig),
+    TunnelStatus(TunnelStatusConfig),
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct ForwardArgs {
     #[arg(
         long = "local",
         short = 'L',
@@ -86,6 +74,36 @@ pub struct FowlCli {
         help = "Offer remote listeners with fowl syntax or SSH syntax [bind_address:]port:host:hostport"
     )]
     pub remote: Vec<String>,
+    #[arg(
+        long = "listen",
+        visible_alias = "listen-to",
+        value_name = "ADDR",
+        help = "Accept local TCP connections at port or bind_address:port"
+    )]
+    pub listen: Vec<String>,
+    #[arg(
+        long = "connect",
+        visible_alias = "connect-on",
+        value_name = "ADDR",
+        help = "Connect locally to host:port when the peer forwards traffic here"
+    )]
+    pub connect: Vec<String>,
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct CommonSessionArgs {
+    #[arg(long = "mailbox", help = "Override the mailbox websocket URL")]
+    pub mailbox: Option<String>,
+    #[arg(long = "code-length", default_value_t = 2, help = "Number of words to allocate when creating a new code")]
+    pub code_length: usize,
+    #[command(flatten)]
+    pub forwards: ForwardArgs,
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct TopLevelArgs {
+    #[command(flatten)]
+    pub common: CommonSessionArgs,
     #[arg(long = "persistent", help = "Store trust material on disk and hand off to the reconnecting daemon")]
     pub persistent: bool,
     #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
@@ -94,40 +112,132 @@ pub struct FowlCli {
     pub code: Option<String>,
 }
 
-impl TryFrom<FowlCli> for FowlConfig {
+#[derive(Debug, Clone, Args)]
+pub struct TunnelArgs {
+    #[command(subcommand)]
+    pub command: TunnelCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum TunnelCommand {
+    Up(TunnelUpArgs),
+    Status(TunnelStatusArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TunnelUpArgs {
+    #[command(flatten)]
+    pub common: CommonSessionArgs,
+    #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+    #[arg(long = "code", value_name = "CODE", help = "Join an existing persistent tunnel code instead of allocating one")]
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TunnelStatusArgs {
+    #[arg(long = "code", value_name = "CODE", required_unless_present = "state", help = "Inspect the persistent tunnel state associated with this code")]
+    pub code: Option<String>,
+    #[arg(long = "state", value_name = "PATH", required_unless_present = "code", help = "Inspect an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+#[command(name = "fowl")]
+#[command(about = "Create a TCP forward over a magic-wormhole session")]
+#[command(long_about = FOWL_LONG_ABOUT)]
+#[command(after_long_help = FOWL_AFTER_HELP)]
+#[command(version)]
+#[command(subcommand_precedence_over_arg = true)]
+pub struct FowlCli {
+    #[command(subcommand)]
+    pub command: Option<FowlSubcommand>,
+    #[command(flatten)]
+    pub top_level: TopLevelArgs,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum FowlSubcommand {
+    Tunnel(TunnelArgs),
+}
+
+impl TryFrom<FowlCli> for FowlInvocation {
     type Error = Error;
 
     fn try_from(value: FowlCli) -> Result<Self> {
-        let locals = value
-            .local
-            .iter()
-            .map(|spec| LocalSpec::parse(spec))
-            .collect::<Result<Vec<_>>>()?;
-        let remotes = value
-            .remote
-            .iter()
-            .map(|spec| RemoteSpec::parse(spec))
-            .collect::<Result<Vec<_>>>()?;
-
-        if locals.is_empty() && remotes.is_empty() {
-            return Err(Error::Usage(
-                "you must specify at least one --local/-L or --remote/-R spec".into(),
-            ));
+        match value.command {
+            Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
+                TunnelCommand::Up(args) => Ok(Self::TunnelUp(build_config(
+                    args.common,
+                    args.code,
+                    args.state,
+                    true,
+                )?)),
+                TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
+                    code: args.code,
+                    state: args.state,
+                })),
+            },
+            None => Ok(Self::Run(build_config(
+                value.top_level.common,
+                value.top_level.code,
+                value.top_level.state,
+                value.top_level.persistent,
+            )?)),
         }
-        if value.code_length == 0 {
-            return Err(Error::Usage("code length must be at least 1".into()));
-        }
-
-        Ok(Self {
-            mailbox: value.mailbox,
-            code_length: value.code_length,
-            code: value.code,
-            locals,
-            remotes,
-            persistent: value.persistent,
-            state: value.state,
-        })
     }
+}
+
+fn build_config(
+    common: CommonSessionArgs,
+    code: Option<String>,
+    state: Option<PathBuf>,
+    persistent: bool,
+) -> Result<FowlConfig> {
+    let (locals, remotes) = parse_forward_args(common.forwards)?;
+
+    if common.code_length == 0 {
+        return Err(Error::Usage("code length must be at least 1".into()));
+    }
+
+    Ok(FowlConfig {
+        mailbox: common.mailbox,
+        code_length: common.code_length,
+        code,
+        locals,
+        remotes,
+        persistent,
+        state,
+    })
+}
+
+fn parse_forward_args(forwards: ForwardArgs) -> Result<(Vec<LocalSpec>, Vec<RemoteSpec>)> {
+    let mut locals = forwards
+        .local
+        .iter()
+        .map(|spec| LocalSpec::parse(spec))
+        .collect::<Result<Vec<_>>>()?;
+    let mut remotes = forwards
+        .remote
+        .iter()
+        .map(|spec| RemoteSpec::parse(spec))
+        .collect::<Result<Vec<_>>>()?;
+
+    for (index, spec) in forwards.listen.iter().enumerate() {
+        locals.push(LocalSpec::parse_listen(spec, index + 1)?);
+    }
+    for (index, spec) in forwards.connect.iter().enumerate() {
+        remotes.push(RemoteSpec::parse_connect(spec, index + 1)?);
+    }
+
+    if locals.is_empty() && remotes.is_empty() {
+        return Err(Error::Usage(
+            "you must specify at least one forward with --listen/--connect or --local/-L/--remote/-R"
+                .into(),
+        ));
+    }
+
+    Ok((locals, remotes))
 }
 
 impl FowlConfig {
