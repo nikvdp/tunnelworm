@@ -9,7 +9,7 @@ use crate::{
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
-    persistent::load_state,
+    persistent::{PersistentRole, load_state},
     session::{self, SessionOptions},
 };
 
@@ -375,7 +375,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 mailbox: state.config.mailbox.clone(),
                 code_length: 2,
                 code: Some(state.config.code.clone()),
-                allocate_on_connect: true,
+                allocate_on_connect: matches!(state.config.role, PersistentRole::Allocate),
             })
             .await?;
 
