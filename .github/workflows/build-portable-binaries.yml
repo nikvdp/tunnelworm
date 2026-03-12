@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   pull_request:
 
 permissions:
@@ -21,20 +23,39 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact_name: fowl-linux-x86_64-musl
+            asset_name: fowl-linux-x86_64-musl.tar.gz
             binary_suffix: ""
+            package_stem: fowl-linux-x86_64-musl
+            archive_kind: tar.gz
+            build_with_zig: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            asset_name: fowl-linux-aarch64-musl.tar.gz
+            binary_suffix: ""
+            package_stem: fowl-linux-aarch64-musl
+            archive_kind: tar.gz
+            build_with_zig: true
           - os: macos-13
             target: x86_64-apple-darwin
-            artifact_name: fowl-macos-x86_64
+            asset_name: fowl-macos-x86_64.tar.gz
             binary_suffix: ""
+            package_stem: fowl-macos-x86_64
+            archive_kind: tar.gz
+            build_with_zig: false
           - os: macos-14
             target: aarch64-apple-darwin
-            artifact_name: fowl-macos-aarch64
+            asset_name: fowl-macos-aarch64.tar.gz
             binary_suffix: ""
+            package_stem: fowl-macos-aarch64
+            archive_kind: tar.gz
+            build_with_zig: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: fowl-windows-x86_64
+            asset_name: fowl-windows-x86_64.zip
             binary_suffix: ".exe"
+            package_stem: fowl-windows-x86_64
+            archive_kind: zip
+            build_with_zig: false
 
     runs-on: ${{ matrix.os }}
 
@@ -47,30 +68,71 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install musl linker
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - name: Install Zig
+        if: matrix.build_with_zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: matrix.build_with_zig
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build release binaries with Zig
+        if: matrix.build_with_zig
+        run: cargo zigbuild --release --target ${{ matrix.target }}
 
       - name: Build release binaries
+        if: ${{ !matrix.build_with_zig }}
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Stage Unix artifacts
+      - name: Package Unix artifacts
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/fowl${{ matrix.binary_suffix }} dist/
-          cp target/${{ matrix.target }}/release/fowld${{ matrix.binary_suffix }} dist/
+          package_dir="dist/${{ matrix.package_stem }}"
+          mkdir -p "$package_dir"
+          cp "target/${{ matrix.target }}/release/fowl${{ matrix.binary_suffix }}" "$package_dir/"
+          cp "target/${{ matrix.target }}/release/fowld${{ matrix.binary_suffix }}" "$package_dir/"
+          tar -C dist -czf "dist/${{ matrix.asset_name }}" "${{ matrix.package_stem }}"
+          rm -rf "$package_dir"
 
-      - name: Stage Windows artifacts
+      - name: Package Windows artifacts
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/fowl${{ matrix.binary_suffix }}" "dist/"
-          Copy-Item "target/${{ matrix.target }}/release/fowld${{ matrix.binary_suffix }}" "dist/"
+          $packageDir = "dist/${{ matrix.package_stem }}"
+          New-Item -ItemType Directory -Force $packageDir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/fowl${{ matrix.binary_suffix }}" $packageDir
+          Copy-Item "target/${{ matrix.target }}/release/fowld${{ matrix.binary_suffix }}" $packageDir
+          Compress-Archive -Path "$packageDir/*" -DestinationPath "dist/${{ matrix.asset_name }}"
+          Remove-Item -Recurse -Force $packageDir
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: dist/*
+          name: ${{ matrix.package_stem }}
+          path: dist/${{ matrix.asset_name }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
