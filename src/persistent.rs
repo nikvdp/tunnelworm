@@ -123,12 +123,47 @@ impl PersistentConfig {
 pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     let cwd = env::current_dir()?;
 
+    if config.code.is_none() && config.locals.is_empty() && config.remotes.is_empty() {
+        let state_path = config.state.as_deref().ok_or_else(|| {
+            Error::Usage(
+                "reusing a persistent side without retyping the forward requires --state <PATH>"
+                    .into(),
+            )
+        })?;
+        if config.overwrite {
+            return Err(Error::Usage(
+                "--overwrite needs an explicit forward definition; it cannot be used with --state-only reuse".into(),
+            ));
+        }
+        let state = load_state(state_path)?;
+        let replay_config = FowlConfig {
+            mailbox: state.config.mailbox.clone(),
+            code_length: config.code_length,
+            code: Some(state.config.code.clone()),
+            locals: state.config.locals.clone(),
+            remotes: state.config.remotes.clone(),
+            state: Some(state_path.to_path_buf()),
+            overwrite: false,
+        };
+        println!("Reusing persistent wormhole code: {}", state.config.code);
+        println!("Persistent state file: {}", state_path.display());
+        for line in replay_config.peer_guidance_lines(&state.config.code, true) {
+            println!("{line}");
+        }
+        println!("Reuse this local state file with: fowl tunnel up --state {}", state_path.display());
+        return exec_persistent_daemon(state_path);
+    }
+
     if let Some(code) = &config.code {
         let expected = PersistentConfig::from_fowl_join_config(config, code.clone());
         let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
         println!("Joining persistent tunnel with code: {}", expected.code);
         println!("Persistent state file: {}", state_path.display());
-        println!("{}", config.peer_requirement_line());
+        for line in config.peer_guidance_lines(&expected.code, true) {
+            println!("{line}");
+        }
+        println!("Reuse this local state file with: fowl tunnel up --state {}", state_path.display());
+        println!("If this local state conflicts with an existing file for this code, rerun with --overwrite to replace it.");
         println!("Waiting for the persistent peer to connect.");
 
         if state_path.exists() {
@@ -157,7 +192,11 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
             if matches_creator_config(&state, config) && !config.overwrite {
                 println!("Reusing persistent wormhole code: {}", state.config.code);
                 println!("Persistent state file: {}", path.display());
-                println!("{}", config.peer_requirement_line());
+                for line in config.peer_guidance_lines(&state.config.code, true) {
+                    println!("{line}");
+                }
+                println!("Reuse this local state file with: fowl tunnel up --state {}", path.display());
+                println!("If this local state conflicts with an existing file for this code, rerun with --overwrite to replace it.");
                 return exec_persistent_daemon(path);
             }
             if !matches_creator_config(&state, config) && !config.overwrite {
@@ -173,7 +212,11 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         if !config.overwrite {
             println!("Reusing persistent wormhole code: {}", state.config.code);
             println!("Persistent state file: {}", state_path.display());
-            println!("{}", config.peer_requirement_line());
+            for line in config.peer_guidance_lines(&state.config.code, true) {
+                println!("{line}");
+            }
+            println!("Reuse this local state file with: fowl tunnel up --state {}", state_path.display());
+            println!("If this local state conflicts with an existing file for this code, rerun with --overwrite to replace it.");
             return exec_persistent_daemon(&state_path);
         }
         println!("Overwriting existing persistent state at {}.", state_path.display());
@@ -183,7 +226,9 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
     println!("Persistent wormhole code: {}", prepared.code);
     println!("Reuse this code on the peer and on future persistent restarts.");
-    println!("{}", config.peer_requirement_line());
+    for line in config.peer_guidance_lines(&prepared.code, true) {
+        println!("{line}");
+    }
     let expected = PersistentConfig::from_fowl_allocate_config(config, prepared.code.clone());
     let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
     let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
@@ -191,6 +236,8 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     session::authenticate_persistent_peer(&mut connected, &mut state).await?;
     save_state(&state_path, &state)?;
     println!("Persistent state file: {}", state_path.display());
+    println!("Reuse this local state file with: fowl tunnel up --state {}", state_path.display());
+    println!("If this local state conflicts with an existing file for this code, rerun with --overwrite to replace it.");
     exec_persistent_daemon(&state_path)
 }
 

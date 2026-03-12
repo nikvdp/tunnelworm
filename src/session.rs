@@ -169,7 +169,9 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
     if prepared.code_was_allocated {
         println!("Wormhole code: {}", prepared.code);
     }
-    println!("{}", config.peer_requirement_line());
+    for line in config.peer_guidance_lines(&prepared.code, false) {
+        println!("{line}");
+    }
     if let Some(welcome) = &prepared.welcome {
         println!("Mailbox welcome: {welcome}");
     }

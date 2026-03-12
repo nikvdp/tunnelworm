@@ -28,11 +28,20 @@ Examples:
   Persistent tunnel, creator side allocates a reusable code:
     fowl tunnel up --connect localhost:22
 
-  Persistent tunnel, join side reuses that code:
+  Persistent tunnel, join side reuses that code with a positional CODE:
+    fowl tunnel up --listen 127.0.0.1:9000 7-cobalt-signal
+
+  The same persistent join using `--code` also works:
     fowl tunnel up --listen 127.0.0.1:9000 --code 7-cobalt-signal
+
+  Replace conflicting local persistent state for that code:
+    fowl tunnel up --listen 127.0.0.1:9000 7-cobalt-signal --overwrite
 
   Inspect the stored state for one local participant:
     fowl tunnel status --state ./.fowl/7-cobalt-signal--abcd1234.json
+
+  Reuse that saved persistent side later without retyping the forward:
+    fowl tunnel up --state ./.fowl/7-cobalt-signal--abcd1234.json
 
   Inspect a tunnel by code when only one local state matches:
     fowl tunnel status --code 7-cobalt-signal
@@ -152,10 +161,12 @@ pub struct TunnelUpArgs {
     pub common: CommonSessionArgs,
     #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
     pub state: Option<PathBuf>,
-    #[arg(long = "overwrite", help = "Replace conflicting local persistent state instead of refusing to start")]
+    #[arg(long = "overwrite", help = "Replace conflicting local persistent state for this code or state file instead of refusing to start")]
     pub overwrite: bool,
-    #[arg(long = "code", value_name = "CODE", help = "Join an existing persistent tunnel code instead of allocating one")]
-    pub code: Option<String>,
+    #[arg(long = "code", value_name = "CODE", conflicts_with = "positional_code", help = "Join an existing persistent tunnel code instead of allocating one")]
+    pub code_flag: Option<String>,
+    #[arg(value_name = "CODE", conflicts_with = "code_flag", help = "Existing persistent tunnel code to join; omit it to allocate one")]
+    pub positional_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -192,12 +203,16 @@ impl TryFrom<FowlCli> for FowlInvocation {
     fn try_from(value: FowlCli) -> Result<Self> {
         match value.command {
             Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
-                TunnelCommand::Up(args) => Ok(Self::TunnelUp(build_config(
-                    args.common,
-                    args.code,
-                    args.state,
-                    args.overwrite,
-                )?)),
+                TunnelCommand::Up(args) => {
+                    let allow_empty_forwards = args.state.is_some();
+                    Ok(Self::TunnelUp(build_config(
+                        args.common,
+                        resolve_tunnel_up_code(args.positional_code, args.code_flag)?,
+                        args.state,
+                        args.overwrite,
+                        allow_empty_forwards,
+                    )?))
+                },
                 TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
                     code: args.code,
                     state: args.state,
@@ -207,6 +222,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
                 value.top_level.common,
                 value.top_level.code,
                 value.top_level.state,
+                false,
                 false,
             )?)),
         }
@@ -218,8 +234,9 @@ fn build_config(
     code: Option<String>,
     state: Option<PathBuf>,
     overwrite: bool,
+    allow_empty_forwards: bool,
 ) -> Result<FowlConfig> {
-    let (locals, remotes) = parse_forward_args(common.forwards)?;
+    let (locals, remotes) = parse_forward_args(common.forwards, allow_empty_forwards)?;
 
     if common.code_length == 0 {
         return Err(Error::Usage("code length must be at least 1".into()));
@@ -236,7 +253,10 @@ fn build_config(
     })
 }
 
-fn parse_forward_args(forwards: ForwardArgs) -> Result<(Vec<LocalSpec>, Vec<RemoteSpec>)> {
+fn parse_forward_args(
+    forwards: ForwardArgs,
+    allow_empty_forwards: bool,
+) -> Result<(Vec<LocalSpec>, Vec<RemoteSpec>)> {
     let mut locals = forwards
         .local
         .iter()
@@ -256,6 +276,9 @@ fn parse_forward_args(forwards: ForwardArgs) -> Result<(Vec<LocalSpec>, Vec<Remo
     }
 
     if locals.is_empty() && remotes.is_empty() {
+        if allow_empty_forwards {
+            return Ok((locals, remotes));
+        }
         return Err(Error::Usage(
             "you must specify at least one forward with --listen/--connect or --local/-L/--remote/-R"
                 .into(),
@@ -278,17 +301,53 @@ impl FowlConfig {
         }
     }
 
-    pub fn peer_requirement_line(&self) -> &'static str {
+    pub fn peer_guidance_lines(&self, code: &str, persistent: bool) -> Vec<String> {
+        let prefix = if persistent { "fowl tunnel up" } else { "fowl" };
         match self.local_half() {
-            ForwardHalf::Listen => {
-                "Peer must provide the complementary --connect side for this tunnel. In SSH-style compatibility syntax, that is the peer's -R side."
-            },
-            ForwardHalf::Connect => {
-                "Peer must provide the complementary --listen side for this tunnel. In SSH-style compatibility syntax, that is the peer's -L side."
-            },
-            ForwardHalf::Mixed => {
-                "Peer must provide the complementary half of each forward on the other side of the tunnel."
-            },
+            ForwardHalf::Listen => vec![
+                "Peer must provide the complementary connect side with the same code.".into(),
+                format!("Preferred syntax: {prefix} --connect HOST:PORT {code}"),
+                format!(
+                    "SSH-style compatibility syntax: fowl -R {}:HOST:PORT {code}",
+                    self.locals
+                        .first()
+                        .and_then(|spec| spec.local_listen_port)
+                        .map(|port| port.to_string())
+                        .unwrap_or_else(|| "LISTEN_PORT".into())
+                ),
+            ],
+            ForwardHalf::Connect => vec![
+                "Peer must provide the complementary listen side with the same code.".into(),
+                format!("Preferred syntax: {prefix} --listen LISTEN_HOST:LISTEN_PORT {code}"),
+                format!(
+                    "SSH-style compatibility syntax: fowl -L LISTEN_PORT:{}:{} {code}",
+                    self.remotes
+                        .first()
+                        .and_then(|spec| spec.connect_address.clone())
+                        .unwrap_or_else(|| "HOST".into()),
+                    self.remotes
+                        .first()
+                        .and_then(|spec| spec.local_connect_port)
+                        .map(|port| port.to_string())
+                        .unwrap_or_else(|| "PORT".into())
+                ),
+            ],
+            ForwardHalf::Mixed => vec![
+                "Peer must provide the complementary half of each forward on the other side of the tunnel.".into(),
+            ],
         }
+    }
+}
+
+fn resolve_tunnel_up_code(
+    positional_code: Option<String>,
+    code_flag: Option<String>,
+) -> Result<Option<String>> {
+    match (positional_code, code_flag) {
+        (Some(_), Some(_)) => Err(Error::Usage(
+            "provide the tunnel code either positionally or with --code, not both".into(),
+        )),
+        (Some(code), None) | (None, Some(code)) => Ok(Some(code)),
+        (None, None) => Ok(None),
     }
 }
