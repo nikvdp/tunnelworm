@@ -128,6 +128,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
                     "existing persistent state is missing the trusted peer identity".into(),
                 ));
             }
+            println!("Persistent state file: {}", state_path.display());
             return exec_persistent_daemon(&state_path);
         }
 
@@ -136,6 +137,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         let mut connected = prepared.connect().await?;
         session::authenticate_persistent_peer(&mut connected, &mut state).await?;
         save_state(&state_path, &state)?;
+        println!("Persistent state file: {}", state_path.display());
         return exec_persistent_daemon(&state_path);
     }
 
@@ -148,6 +150,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     let mut connected = prepared.connect().await?;
     session::authenticate_persistent_peer(&mut connected, &mut state).await?;
     save_state(&state_path, &state)?;
+    println!("Persistent state file: {}", state_path.display());
     exec_persistent_daemon(&state_path)
 }
 
