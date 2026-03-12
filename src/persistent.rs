@@ -94,17 +94,13 @@ impl PersistentState {
 impl PersistentConfig {
     pub fn from_fowl_config(config: &FowlConfig) -> Result<Self> {
         let code = config.code.clone().ok_or_else(|| {
-            Error::Usage("persistent mode requires an explicit wormhole code".into())
+            Error::Usage("persistent mode requires an explicit wormhole code on the joining side".into())
         })?;
-        let role = match (config.locals.is_empty(), config.remotes.is_empty()) {
-            (false, true) => PersistentRole::Join,
-            (true, false) => PersistentRole::Allocate,
-            _ => {
-                return Err(Error::Usage(
-                    "persistent mode currently requires exactly one of --local/-L or --remote/-R".into(),
-                ));
-            },
-        };
+        Ok(Self::from_fowl_config_with_code(config, code)?)
+    }
+
+    pub fn from_fowl_config_with_code(config: &FowlConfig, code: String) -> Result<Self> {
+        let role = Self::role_from_fowl_config(config)?;
         Ok(Self {
             code,
             mailbox: config.mailbox.clone(),
@@ -113,25 +109,58 @@ impl PersistentConfig {
             remotes: config.remotes.clone(),
         })
     }
+
+    pub fn role_from_fowl_config(config: &FowlConfig) -> Result<PersistentRole> {
+        match (config.locals.is_empty(), config.remotes.is_empty()) {
+            (false, true) => PersistentRole::Join,
+            (true, false) => PersistentRole::Allocate,
+            _ => {
+                return Err(Error::Usage(
+                    "persistent mode currently requires exactly one of --local/-L or --remote/-R".into(),
+                ));
+            },
+        }
+    }
 }
 
 pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
-    let expected = config.persistent_config()?;
     let cwd = env::current_dir()?;
-    let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
+    let role = PersistentConfig::role_from_fowl_config(config)?;
 
-    if state_path.exists() {
-        let state = load_matching_state(&state_path, &expected)?;
-        if state.peer_public_key_hex.is_none() {
-            return Err(Error::PersistentState(
-                "existing persistent state is missing the trusted peer identity".into(),
-            ));
+    if let Some(code) = &config.code {
+        let expected = PersistentConfig::from_fowl_config_with_code(config, code.clone())?;
+        let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
+
+        if state_path.exists() {
+            let state = load_matching_state(&state_path, &expected)?;
+            if state.peer_public_key_hex.is_none() {
+                return Err(Error::PersistentState(
+                    "existing persistent state is missing the trusted peer identity".into(),
+                ));
+            }
+            return exec_persistent_daemon(&state_path);
         }
+
+        let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
+        let prepared = session::prepare_session(SessionOptions::from(config)).await?;
+        let mut connected = prepared.connect().await?;
+        session::authenticate_persistent_peer(&mut connected, &mut state).await?;
+        save_state(&state_path, &state)?;
         return exec_persistent_daemon(&state_path);
     }
 
-    let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
+    if role != PersistentRole::Allocate {
+        return Err(Error::Usage(
+            "persistent mode requires an explicit wormhole code on the joining side".into(),
+        ));
+    }
+
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
+    println!("Persistent wormhole code: {}", prepared.code);
+    println!("Reuse this code on the peer and on future persistent restarts.");
+    let expected = PersistentConfig::from_fowl_config_with_code(config, prepared.code.clone())?;
+    let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
+    let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
     let mut connected = prepared.connect().await?;
     session::authenticate_persistent_peer(&mut connected, &mut state).await?;
     save_state(&state_path, &state)?;

@@ -32,11 +32,14 @@ Examples:
   Bind the local listener to a specific interface:
     fowl -L web:7000:remote-connect=9000:bind=0.0.0.0 7-cobalt-signal
 
-  Persistent mode, first terminal:
-    fowl --persistent -R 7000:127.0.0.1:9000 7-cobalt-signal
+  Persistent mode, first terminal, let fowl allocate the stable code:
+    fowl --persistent -R 7000:127.0.0.1:9000
 
   Persistent mode, second terminal:
     fowl --persistent -L 7000:127.0.0.1:9000 7-cobalt-signal
+
+  The first terminal prints the code to reuse for the peer and on future
+  restarts of the same persistent tunnel.
 
   After a crash or reboot, rerun the same persistent command on either side.
   `fowl` will find the saved state in `./.fowl/` first, then the per-user state
