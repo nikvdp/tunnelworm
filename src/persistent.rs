@@ -156,23 +156,44 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     if let Some(code) = &config.code {
         let expected = PersistentConfig::from_fowl_join_config(config, code.clone());
         let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
-        print_tunnel_intro(&style, "Persistent join:", &expected.code, config);
-        print_state_block(&style, config, &state_path, &expected.code);
-        println!();
-        println!("{} waiting for the persistent peer...", style.status("Status:"));
 
         if state_path.exists() {
             if config.overwrite {
+                print_tunnel_intro(&style, "Persistent join:", &expected.code, config);
+                print_state_block(&style, config, &state_path, &expected.code);
+                println!();
                 println!(
                     "Overwriting existing persistent state at {}.",
                     state_path.display()
                 );
             } else {
+                let existing_state = load_state(&state_path)?;
+                if matches_local_participant(&existing_state, config, code) {
+                    if existing_state.peer_public_key_hex.is_none() {
+                        return Err(conflicting_state_error(
+                            &state_path,
+                            "existing persistent state is missing the trusted peer identity",
+                        ));
+                    }
+                    print_tunnel_intro(&style, "Persistent reuse:", &existing_state.config.code, config);
+                    print_state_block(&style, config, &state_path, &existing_state.config.code);
+                    println!();
+                    println!("{} handing off to the persistent worker...", style.status("Status:"));
+                    return exec_persistent_daemon(&state_path);
+                }
+                print_tunnel_intro(&style, "Persistent join:", &expected.code, config);
+                print_state_block(&style, config, &state_path, &expected.code);
+                println!();
+                println!("{} waiting for the persistent peer...", style.status("Status:"));
                 load_matching_join_state(&state_path, &expected)?;
                 return exec_persistent_daemon(&state_path);
             }
         }
 
+        print_tunnel_intro(&style, "Persistent join:", &expected.code, config);
+        print_state_block(&style, config, &state_path, &expected.code);
+        println!();
+        println!("{} waiting for the persistent peer...", style.status("Status:"));
         let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
         let prepared = session::prepare_session(SessionOptions::from(config)).await?;
         let mut connected = prepared.connect().await?;
@@ -290,6 +311,14 @@ fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option
 fn matches_creator_config(state: &PersistentState, config: &FowlConfig) -> bool {
     state.version == STATE_VERSION
         && state.config.role == PersistentRole::Allocate
+        && state.config.mailbox == config.mailbox
+        && state.config.locals == config.locals
+        && state.config.remotes == config.remotes
+}
+
+fn matches_local_participant(state: &PersistentState, config: &FowlConfig, code: &str) -> bool {
+    state.version == STATE_VERSION
+        && state.config.code == code
         && state.config.mailbox == config.mailbox
         && state.config.locals == config.locals
         && state.config.remotes == config.remotes
