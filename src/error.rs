@@ -4,6 +4,8 @@ use thiserror::Error;
 pub enum Error {
     #[error("not implemented yet: {0}")]
     NotImplemented(&'static str),
+    #[error("usage error: {0}")]
+    Usage(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

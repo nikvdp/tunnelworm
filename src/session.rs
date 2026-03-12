@@ -1,6 +1,9 @@
-use crate::error::{Error, Result};
+use crate::{
+    cli::FowlConfig,
+    error::{Error, Result},
+};
 
-pub async fn run_fowl() -> Result<()> {
+pub async fn run_fowl(_config: FowlConfig) -> Result<()> {
     Err(Error::NotImplemented("fowl runtime"))
 }
 
