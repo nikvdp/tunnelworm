@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use crate::{
     cli::FowlConfig,
     error::{Error, Result},
+    forward::{self, CliIntent, ForwardEvent},
 };
 
 #[derive(Debug, Clone)]
@@ -122,11 +123,27 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
     if prepared.code_was_allocated {
         println!("code: {}", prepared.code);
     }
-    let session = prepared.connect().await?;
+    let mut session = prepared.connect().await?;
     println!("peer-connected: {}", session.verifier);
     println!("peer-versions: {}", session.peer_version);
-    session.wormhole.close().await?;
-    Ok(())
+
+    let intent = CliIntent::from(&config);
+    let peer_intent = forward::exchange_cli_intents(&mut session.wormhole, &intent).await?;
+    let plan = forward::build_cli_plan(&intent, &peer_intent)?;
+    forward::run_forwarding(session, plan, |event| match event {
+        ForwardEvent::Listening {
+            name,
+            listen_host,
+            listen_port,
+            connect_host,
+            connect_port,
+        } => {
+            println!(
+                "listening: service={name} listen={listen_host}:{listen_port} connect={connect_host}:{connect_port}"
+            );
+        },
+    })
+    .await
 }
 
 pub async fn run_fowld() -> Result<()> {

@@ -12,6 +12,8 @@ pub enum Error {
     SerdeJson(#[from] serde_json::Error),
     #[error(transparent)]
     Wormhole(#[from] magic_wormhole::WormholeError),
+    #[error(transparent)]
+    Forwarding(#[from] magic_wormhole::forwarding::ForwardingError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

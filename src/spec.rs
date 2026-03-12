@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::error::{Error, Result};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalSpec {
     pub name: String,
     pub local_listen_port: Option<u16>,
@@ -8,7 +10,7 @@ pub struct LocalSpec {
     pub bind_interface: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteSpec {
     pub name: String,
     pub local_connect_port: Option<u16>,
