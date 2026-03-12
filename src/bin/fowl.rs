@@ -1,6 +1,7 @@
 use clap::Parser;
 
 use fowl_rs::cli::{FowlCli, FowlConfig};
+use fowl_rs::persistent;
 
 #[async_std::main]
 async fn main() {
@@ -13,7 +14,13 @@ async fn main() {
         },
     };
 
-    if let Err(error) = fowl_rs::session::run_fowl(config).await {
+    let result = if config.persistent {
+        persistent::initialize_or_exec(&config).await
+    } else {
+        fowl_rs::session::run_fowl(config).await
+    };
+
+    if let Err(error) = result {
         eprintln!("{error}");
         std::process::exit(1);
     }

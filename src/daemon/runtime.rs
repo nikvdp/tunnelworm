@@ -2,6 +2,7 @@ use async_channel::{Receiver, Sender};
 use async_std::{io, prelude::*, task};
 use futures::{FutureExt, select};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::{
     daemon::protocol::{InputCommand, OutputEvent},
@@ -347,4 +348,8 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
+    Err(Error::NotImplemented("persistent fowld runtime"))
 }

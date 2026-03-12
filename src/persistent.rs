@@ -3,12 +3,16 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    cli::FowlConfig,
     error::{Error, Result},
+    persistent_auth,
+    session::{self, SessionOptions},
     spec::{LocalSpec, RemoteSpec},
 };
 
@@ -85,6 +89,53 @@ impl PersistentState {
         }
         Ok(())
     }
+}
+
+impl PersistentConfig {
+    pub fn from_fowl_config(config: &FowlConfig) -> Result<Self> {
+        let code = config.code.clone().ok_or_else(|| {
+            Error::Usage("persistent mode requires an explicit wormhole code".into())
+        })?;
+        let role = match (config.locals.is_empty(), config.remotes.is_empty()) {
+            (false, true) => PersistentRole::Join,
+            (true, false) => PersistentRole::Allocate,
+            _ => {
+                return Err(Error::Usage(
+                    "persistent mode currently requires exactly one of --local/-L or --remote/-R".into(),
+                ));
+            },
+        };
+        Ok(Self {
+            code,
+            mailbox: config.mailbox.clone(),
+            role,
+            locals: config.locals.clone(),
+            remotes: config.remotes.clone(),
+        })
+    }
+}
+
+pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
+    let expected = config.persistent_config()?;
+    let cwd = env::current_dir()?;
+    let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected.code)?;
+
+    if state_path.exists() {
+        let state = load_matching_state(&state_path, &expected)?;
+        if state.peer_public_key_hex.is_none() {
+            return Err(Error::PersistentState(
+                "existing persistent state is missing the trusted peer identity".into(),
+            ));
+        }
+        return exec_persistent_daemon(&state_path);
+    }
+
+    let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
+    let prepared = session::prepare_session(SessionOptions::from(config)).await?;
+    let mut connected = prepared.connect().await?;
+    session::authenticate_persistent_peer(&mut connected, &mut state).await?;
+    save_state(&state_path, &state)?;
+    exec_persistent_daemon(&state_path)
 }
 
 pub fn resolve_state_path(
@@ -206,6 +257,40 @@ fn write_with_restrictive_permissions(path: &Path, bytes: Vec<u8>) -> Result<()>
     file.write_all(&bytes)?;
     file.write_all(b"\n")?;
     Ok(())
+}
+
+fn exec_persistent_daemon(state_path: &Path) -> Result<()> {
+    let daemon_path = persistent_daemon_path()?;
+    let mut command = Command::new(&daemon_path);
+    command.arg("--persistent-state").arg(state_path);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        return Err(Error::Io(command.exec()));
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = command.status()?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(Error::PersistentState(format!(
+            "persistent daemon {:?} exited with status {}",
+            daemon_path, status
+        )))
+    }
+}
+
+fn persistent_daemon_path() -> Result<PathBuf> {
+    let current_exe = env::current_exe()?;
+    let sibling = current_exe.with_file_name("fowld");
+    if sibling.exists() {
+        return Ok(sibling);
+    }
+    Ok(PathBuf::from("fowld"))
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {

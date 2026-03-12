@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::path::PathBuf;
 
 use fowl_rs::daemon::runtime::DaemonConfig;
 
@@ -48,6 +49,8 @@ struct Args {
     mailbox: Option<String>,
     #[arg(long = "code-length", default_value_t = 2, help = "Default word count when `allocate-code` omits `code_length`")]
     code_length: usize,
+    #[arg(long = "persistent-state", hide = true)]
+    persistent_state: Option<PathBuf>,
 }
 
 #[async_std::main]
@@ -57,7 +60,11 @@ async fn main() {
         mailbox: args.mailbox,
         code_length: args.code_length,
     };
-    if let Err(error) = fowl_rs::daemon::runtime::run(config).await {
+    let result = match args.persistent_state {
+        Some(path) => fowl_rs::daemon::runtime::run_persistent(path).await,
+        None => fowl_rs::daemon::runtime::run(config).await,
+    };
+    if let Err(error) = result {
         eprintln!("{error}");
         std::process::exit(1);
     }

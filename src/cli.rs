@@ -1,7 +1,9 @@
 use clap::Parser;
+use std::path::PathBuf;
 
 use crate::{
     error::{Error, Result},
+    persistent::PersistentConfig,
     spec::{LocalSpec, RemoteSpec},
 };
 
@@ -42,6 +44,8 @@ pub struct FowlConfig {
     pub code: Option<String>,
     pub locals: Vec<LocalSpec>,
     pub remotes: Vec<RemoteSpec>,
+    pub persistent: bool,
+    pub state: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -69,6 +73,10 @@ pub struct FowlCli {
         help = "Offer remote listeners with fowl syntax or SSH syntax [bind_address:]port:host:hostport"
     )]
     pub remote: Vec<String>,
+    #[arg(long = "persistent", help = "Store trust material on disk and hand off to the reconnecting daemon")]
+    pub persistent: bool,
+    #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
     #[arg(help = "Existing wormhole code to join; omit it to allocate a new code")]
     pub code: Option<String>,
 }
@@ -103,6 +111,14 @@ impl TryFrom<FowlCli> for FowlConfig {
             code: value.code,
             locals,
             remotes,
+            persistent: value.persistent,
+            state: value.state,
         })
+    }
+}
+
+impl FowlConfig {
+    pub fn persistent_config(&self) -> Result<PersistentConfig> {
+        PersistentConfig::from_fowl_config(self)
     }
 }
