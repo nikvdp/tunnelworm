@@ -10,6 +10,8 @@ use crate::{
     cli::FowlConfig,
     error::{Error, Result},
     forward::{self, CliIntent, ForwardEvent},
+    persistent::PersistentState,
+    persistent_auth,
 };
 
 #[derive(Debug, Clone)]
@@ -113,6 +115,13 @@ impl PreparedSession {
             relay_hints,
         })
     }
+}
+
+pub async fn authenticate_persistent_peer(
+    session: &mut ConnectedSession,
+    state: &mut PersistentState,
+) -> Result<()> {
+    persistent_auth::authenticate(&mut session.wormhole, state).await
 }
 
 pub async fn run_fowl(config: FowlConfig) -> Result<()> {

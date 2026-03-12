@@ -8,6 +8,8 @@ pub enum Error {
     Usage(String),
     #[error("persistent state error: {0}")]
     PersistentState(String),
+    #[error("authentication error: {0}")]
+    Authentication(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
