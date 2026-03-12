@@ -6,6 +6,8 @@ pub enum Error {
     NotImplemented(&'static str),
     #[error("usage error: {0}")]
     Usage(String),
+    #[error("persistent state error: {0}")]
+    PersistentState(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
