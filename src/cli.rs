@@ -54,7 +54,6 @@ pub struct FowlConfig {
     pub code: Option<String>,
     pub locals: Vec<LocalSpec>,
     pub remotes: Vec<RemoteSpec>,
-    pub persistent: bool,
     pub state: Option<PathBuf>,
     pub overwrite: bool,
 }
@@ -125,8 +124,6 @@ pub struct CommonSessionArgs {
 pub struct TopLevelArgs {
     #[command(flatten)]
     pub common: CommonSessionArgs,
-    #[arg(long = "persistent", help = "Store trust material on disk and hand off to the reconnecting daemon")]
-    pub persistent: bool,
     #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
     pub state: Option<PathBuf>,
     #[arg(help = "Existing wormhole code to join; omit it to allocate a new code")]
@@ -211,7 +208,6 @@ impl TryFrom<FowlCli> for FowlInvocation {
                 value.top_level.common,
                 value.top_level.code,
                 value.top_level.state,
-                value.top_level.persistent,
                 false,
             )?)),
         }
@@ -222,7 +218,6 @@ fn build_config(
     common: CommonSessionArgs,
     code: Option<String>,
     state: Option<PathBuf>,
-    persistent: bool,
     overwrite: bool,
 ) -> Result<FowlConfig> {
     let (locals, remotes) = parse_forward_args(common.forwards)?;
@@ -237,7 +232,6 @@ fn build_config(
         code,
         locals,
         remotes,
-        persistent,
         state,
         overwrite,
     })
