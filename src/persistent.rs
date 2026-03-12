@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::FowlConfig,
+    cli::{FowlConfig, TunnelStatusConfig},
     error::{Error, Result},
     persistent_auth,
     session::{self, SessionOptions},
@@ -190,6 +190,32 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     exec_persistent_daemon(&state_path)
 }
 
+pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let (state_path, state) = resolve_status_state(config.state.as_deref(), config.code.as_deref(), &cwd)?;
+
+    println!("Persistent state file: {}", state_path.display());
+    println!("State exists: yes");
+    println!("Tunnel code: {}", state.config.code);
+    println!("Bootstrap role: {}", bootstrap_role_label(state.config.role));
+    println!("Local forward role: {}", local_forward_role_label(&state.config));
+    println!("Local endpoint: {}", local_endpoint_label(&state.config));
+    println!(
+        "Mailbox: {}",
+        state
+            .config
+            .mailbox
+            .as_deref()
+            .unwrap_or("the default rendezvous server")
+    );
+    println!(
+        "Peer key fingerprint: {}",
+        peer_key_fingerprint(state.peer_public_key_hex.as_deref())
+    );
+
+    Ok(())
+}
+
 fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option<(PathBuf, PersistentState)>> {
     let mut matches = Vec::new();
     for dir in [project_state_dir(cwd), user_state_dir()?] {
@@ -225,6 +251,72 @@ fn matches_creator_config(state: &PersistentState, config: &FowlConfig) -> bool 
         && state.config.mailbox == config.mailbox
         && state.config.locals == config.locals
         && state.config.remotes == config.remotes
+}
+
+fn resolve_status_state(
+    explicit: Option<&Path>,
+    code: Option<&str>,
+    cwd: &Path,
+) -> Result<(PathBuf, PersistentState)> {
+    if let Some(path) = explicit {
+        if !path.exists() {
+            return Err(Error::PersistentState(format!(
+                "persistent state file not found at {}",
+                path.display()
+            )));
+        }
+        let state = load_state(path).map_err(|error| match error {
+            Error::SerdeJson(_) | Error::PersistentState(_) => Error::PersistentState(format!(
+                "could not read persistent state at {}: {error}",
+                path.display()
+            )),
+            other => other,
+        })?;
+        return Ok((path.to_path_buf(), state));
+    }
+
+    let code = code.ok_or_else(|| {
+        Error::PersistentState("tunnel status needs either --state or --code".into())
+    })?;
+    let mut matches = Vec::new();
+
+    for dir in [project_state_dir(cwd), user_state_dir()?] {
+        if !dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(state) = load_state(&path) else {
+                continue;
+            };
+            if state.config.code == code {
+                matches.push((path, state));
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => Err(Error::PersistentState(format!(
+            "no persistent state was found for code {:?}; rerun `fowl tunnel up` or point `fowl tunnel status` at a specific file with --state",
+            code
+        ))),
+        1 => Ok(matches.into_iter().next().expect("one match must exist")),
+        _ => {
+            let paths = matches
+                .iter()
+                .map(|(path, _)| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(Error::PersistentState(format!(
+                "multiple persistent state files use code {:?}: {}. Rerun with --state to inspect one specific local participant.",
+                code, paths
+            )))
+        },
+    }
 }
 
 pub fn resolve_state_path(
@@ -371,6 +463,57 @@ fn conflicting_state_error(path: &Path, detail: &str) -> Error {
         "{detail} at {}. Rerun with --overwrite to replace this local state, or use --state to select a different file.",
         path.display()
     ))
+}
+
+fn bootstrap_role_label(role: PersistentRole) -> &'static str {
+    match role {
+        PersistentRole::Allocate => "creator",
+        PersistentRole::Join => "joiner",
+    }
+}
+
+fn local_forward_role_label(config: &PersistentConfig) -> &'static str {
+    match (!config.locals.is_empty(), !config.remotes.is_empty()) {
+        (true, false) => "listen",
+        (false, true) => "connect",
+        (true, true) => "mixed",
+        (false, false) => "none",
+    }
+}
+
+fn local_endpoint_label(config: &PersistentConfig) -> String {
+    if let Some(local) = config.locals.first() {
+        let host = local
+            .bind_interface
+            .as_deref()
+            .unwrap_or("127.0.0.1");
+        let port = local
+            .local_listen_port
+            .map(|port| port.to_string())
+            .unwrap_or_else(|| "<auto>".into());
+        return format!("{host}:{port}");
+    }
+
+    if let Some(remote) = config.remotes.first() {
+        let host = remote
+            .connect_address
+            .as_deref()
+            .unwrap_or("127.0.0.1");
+        let port = remote
+            .local_connect_port
+            .map(|port| port.to_string())
+            .unwrap_or_else(|| "<auto>".into());
+        return format!("{host}:{port}");
+    }
+
+    "<none>".into()
+}
+
+fn peer_key_fingerprint(peer_public_key_hex: Option<&str>) -> String {
+    match peer_public_key_hex {
+        Some(peer_public_key_hex) => peer_public_key_hex.chars().take(16).collect(),
+        None => "<unpaired>".into(),
+    }
 }
 
 fn exec_persistent_daemon(state_path: &Path) -> Result<()> {

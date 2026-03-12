@@ -2,7 +2,6 @@ use clap::Parser;
 
 use fowl_rs::{
     cli::{FowlCli, FowlInvocation},
-    error::Error,
     persistent,
 };
 
@@ -26,7 +25,7 @@ async fn main() {
             }
         },
         FowlInvocation::TunnelUp(config) => persistent::initialize_or_exec(&config).await,
-        FowlInvocation::TunnelStatus(_) => Err(Error::NotImplemented("fowl tunnel status")),
+        FowlInvocation::TunnelStatus(config) => persistent::print_status(&config),
     };
 
     if let Err(error) = result {
