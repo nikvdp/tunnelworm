@@ -71,12 +71,6 @@ impl PersistentState {
                 self.config.code, expected.code
             )));
         }
-        if self.config.role != expected.role {
-            return Err(Error::PersistentState(format!(
-                "state file is bound to role {:?}, not {:?}",
-                self.config.role, expected.role
-            )));
-        }
         if self.config.mailbox != expected.mailbox {
             return Err(Error::PersistentState(
                 "state file mailbox does not match the requested mailbox".into(),
@@ -96,39 +90,35 @@ impl PersistentConfig {
         let code = config.code.clone().ok_or_else(|| {
             Error::Usage("persistent mode requires an explicit wormhole code on the joining side".into())
         })?;
-        Ok(Self::from_fowl_config_with_code(config, code)?)
+        Ok(Self::from_fowl_join_config(config, code))
     }
 
-    pub fn from_fowl_config_with_code(config: &FowlConfig, code: String) -> Result<Self> {
-        let role = Self::role_from_fowl_config(config)?;
-        Ok(Self {
+    pub fn from_fowl_join_config(config: &FowlConfig, code: String) -> Self {
+        Self {
             code,
             mailbox: config.mailbox.clone(),
-            role,
+            role: PersistentRole::Join,
             locals: config.locals.clone(),
             remotes: config.remotes.clone(),
-        })
+        }
     }
 
-    pub fn role_from_fowl_config(config: &FowlConfig) -> Result<PersistentRole> {
-        match (config.locals.is_empty(), config.remotes.is_empty()) {
-            (false, true) => Ok(PersistentRole::Join),
-            (true, false) => Ok(PersistentRole::Allocate),
-            _ => {
-                return Err(Error::Usage(
-                    "persistent mode currently requires exactly one of --local/-L or --remote/-R".into(),
-                ));
-            },
+    pub fn from_fowl_allocate_config(config: &FowlConfig, code: String) -> Self {
+        Self {
+            code,
+            mailbox: config.mailbox.clone(),
+            role: PersistentRole::Allocate,
+            locals: config.locals.clone(),
+            remotes: config.remotes.clone(),
         }
     }
 }
 
 pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     let cwd = env::current_dir()?;
-    let role = PersistentConfig::role_from_fowl_config(config)?;
 
     if let Some(code) = &config.code {
-        let expected = PersistentConfig::from_fowl_config_with_code(config, code.clone())?;
+        let expected = PersistentConfig::from_fowl_join_config(config, code.clone());
         let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
 
         if state_path.exists() {
@@ -149,16 +139,10 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         return exec_persistent_daemon(&state_path);
     }
 
-    if role != PersistentRole::Allocate {
-        return Err(Error::Usage(
-            "persistent mode requires an explicit wormhole code on the joining side".into(),
-        ));
-    }
-
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
     println!("Persistent wormhole code: {}", prepared.code);
     println!("Reuse this code on the peer and on future persistent restarts.");
-    let expected = PersistentConfig::from_fowl_config_with_code(config, prepared.code.clone())?;
+    let expected = PersistentConfig::from_fowl_allocate_config(config, prepared.code.clone());
     let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
     let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
     let mut connected = prepared.connect().await?;
@@ -226,7 +210,7 @@ pub fn state_file_name(config: &PersistentConfig) -> Result<String> {
         .trim_matches('-')
         .to_string();
     let slug = if slug.is_empty() { "code".into() } else { slug };
-    let fingerprint = serde_json::to_vec(config)
+    let fingerprint = serde_json::to_vec(&(&config.code, &config.mailbox, &config.locals, &config.remotes))
         .map_err(|error| Error::PersistentState(format!("could not fingerprint state config: {error}")))?;
     Ok(format!("{slug}--{:016x}.json", fnv1a64(&fingerprint)))
 }
