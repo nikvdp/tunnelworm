@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::borrow::Cow;
 
 use crate::{
-    cli::FowlConfig,
+    cli::{stdout_style, FowlConfig},
     error::{Error, Result},
     forward::{self, CliIntent, ForwardEvent},
     persistent::PersistentState,
@@ -165,20 +165,35 @@ pub async fn authenticate_persistent_peer(
 }
 
 pub async fn run_fowl(config: FowlConfig) -> Result<()> {
+    let style = stdout_style();
     let prepared = prepare_session(SessionOptions::from(&config)).await?;
-    if prepared.code_was_allocated {
-        println!("Wormhole code: {}", prepared.code);
+    if prepared.code_was_allocated || config.code.is_some() {
+        let mode = if prepared.code_was_allocated {
+            "One-off code:"
+        } else {
+            "One-off join:"
+        };
+        println!("{} {}", style.heading(mode), prepared.code);
     }
-    for line in config.peer_guidance_lines(&prepared.code, false) {
-        println!("{line}");
+    println!("{} {}", style.heading("Local:"), config.local_summary());
+    if let (Some(preferred), Some(ssh_style)) = (
+        config.peer_preferred_command(&prepared.code, false),
+        config.peer_ssh_command(&prepared.code),
+    ) {
+        println!();
+        println!("{}", style.heading("Peer commands"));
+        println!("  {} {}", style.label("preferred:"), preferred);
+        println!("  {} {}", style.label("ssh-style:"), ssh_style);
     }
+    println!();
+    println!("{} waiting for peer...", style.status("Status:"));
     if let Some(welcome) = &prepared.welcome {
-        println!("Mailbox welcome: {welcome}");
+        println!("{} {welcome}", style.label("Mailbox:"));
     }
     let mut session = prepared.connect().await?;
-    println!("Peer connected.");
-    println!("Verifier: {}", session.verifier);
-    println!("Peer versions: {}", session.peer_version);
+    println!("{} peer connected", style.status("Status:"));
+    println!("{} {}", style.label("Verifier:"), session.verifier);
+    println!("{} {}", style.label("Peer version:"), session.peer_version);
 
     let intent = CliIntent::from(&config);
     let peer_intent = forward::exchange_cli_intents(&mut session.wormhole, &intent).await?;
@@ -193,7 +208,13 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
             connect_port,
         } => {
             println!(
-                "Listening for {name} on {listen_host}:{listen_port}; forwarding to {connect_host}:{connect_port} on the peer."
+                "{} {} on {}:{} -> {}:{}",
+                style.status("Listening:"),
+                name,
+                listen_host,
+                listen_port,
+                connect_host,
+                connect_port
             );
         },
     })

@@ -1,7 +1,7 @@
 use clap::Parser;
 
 use fowl_rs::{
-    cli::{FowlCli, FowlInvocation},
+    cli::{stderr_style, FowlCli, FowlInvocation},
     persistent,
 };
 
@@ -11,7 +11,7 @@ async fn main() {
     let invocation = match FowlInvocation::try_from(args) {
         Ok(invocation) => invocation,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{} {error}", stderr_style().error("Error:"));
             std::process::exit(2);
         },
     };
@@ -23,7 +23,7 @@ async fn main() {
     };
 
     if let Err(error) = result {
-        eprintln!("{error}");
+        eprintln!("{} {error}", stderr_style().error("Error:"));
         std::process::exit(1);
     }
 }

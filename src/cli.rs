@@ -1,5 +1,8 @@
 use clap::{Args, Parser, Subcommand};
-use std::path::PathBuf;
+use std::{
+    io::IsTerminal,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     error::{Error, Result},
@@ -85,6 +88,49 @@ pub enum ForwardHalf {
     Listen,
     Connect,
     Mixed,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AnsiStyle {
+    enabled: bool,
+}
+
+pub fn stdout_style() -> AnsiStyle {
+    AnsiStyle {
+        enabled: std::io::stdout().is_terminal(),
+    }
+}
+
+pub fn stderr_style() -> AnsiStyle {
+    AnsiStyle {
+        enabled: std::io::stderr().is_terminal(),
+    }
+}
+
+impl AnsiStyle {
+    fn paint(&self, value: &str, code: &str) -> String {
+        if self.enabled {
+            format!("\x1b[{code}m{value}\x1b[0m")
+        } else {
+            value.to_string()
+        }
+    }
+
+    pub fn heading(&self, value: &str) -> String {
+        self.paint(value, "1;36")
+    }
+
+    pub fn label(&self, value: &str) -> String {
+        self.paint(value, "1")
+    }
+
+    pub fn status(&self, value: &str) -> String {
+        self.paint(value, "1;33")
+    }
+
+    pub fn error(&self, value: &str) -> String {
+        self.paint(value, "1;31")
+    }
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -301,40 +347,98 @@ impl FowlConfig {
         }
     }
 
-    pub fn peer_guidance_lines(&self, code: &str, persistent: bool) -> Vec<String> {
-        let prefix = if persistent { "fowl tunnel up" } else { "fowl" };
+    pub fn local_summary(&self) -> String {
         match self.local_half() {
-            ForwardHalf::Listen => vec![
-                "Peer must provide the complementary connect side with the same code.".into(),
-                format!("Preferred syntax: {prefix} --connect HOST:PORT {code}"),
+            ForwardHalf::Listen => {
+                let spec = self.locals.first().expect("listen half needs a local spec");
                 format!(
-                    "SSH-style compatibility syntax: fowl -R {}:HOST:PORT {code}",
-                    self.locals
-                        .first()
-                        .and_then(|spec| spec.local_listen_port)
-                        .map(|port| port.to_string())
-                        .unwrap_or_else(|| "LISTEN_PORT".into())
-                ),
-            ],
-            ForwardHalf::Connect => vec![
-                "Peer must provide the complementary listen side with the same code.".into(),
-                format!("Preferred syntax: {prefix} --listen LISTEN_HOST:LISTEN_PORT {code}"),
-                format!(
-                    "SSH-style compatibility syntax: fowl -L LISTEN_PORT:{}:{} {code}",
-                    self.remotes
-                        .first()
-                        .and_then(|spec| spec.connect_address.clone())
-                        .unwrap_or_else(|| "HOST".into()),
-                    self.remotes
-                        .first()
-                        .and_then(|spec| spec.local_connect_port)
+                    "listen on {}:{}",
+                    spec.bind_interface.as_deref().unwrap_or("127.0.0.1"),
+                    spec.local_listen_port
                         .map(|port| port.to_string())
                         .unwrap_or_else(|| "PORT".into())
-                ),
-            ],
-            ForwardHalf::Mixed => vec![
-                "Peer must provide the complementary half of each forward on the other side of the tunnel.".into(),
-            ],
+                )
+            },
+            ForwardHalf::Connect => {
+                let spec = self.remotes.first().expect("connect half needs a remote spec");
+                format!(
+                    "connect to {}:{}",
+                    spec.connect_address.as_deref().unwrap_or("127.0.0.1"),
+                    spec.local_connect_port
+                        .map(|port| port.to_string())
+                        .unwrap_or_else(|| "PORT".into())
+                )
+            },
+            ForwardHalf::Mixed => "multiple forward halves".into(),
+        }
+    }
+
+    pub fn peer_preferred_command(&self, code: &str, persistent: bool) -> Option<String> {
+        let prefix = if persistent { "fowl tunnel up" } else { "fowl" };
+        match self.local_half() {
+            ForwardHalf::Listen => Some(format!("{prefix} --connect HOST:PORT {code}")),
+            ForwardHalf::Connect => {
+                Some(format!("{prefix} --listen LISTEN_HOST:LISTEN_PORT {code}"))
+            },
+            ForwardHalf::Mixed => None,
+        }
+    }
+
+    pub fn peer_ssh_command(&self, code: &str) -> Option<String> {
+        match self.local_half() {
+            ForwardHalf::Listen => Some(format!(
+                "fowl -R {}:HOST:PORT {code}",
+                self.locals
+                    .first()
+                    .and_then(|spec| spec.local_listen_port)
+                    .map(|port| port.to_string())
+                    .unwrap_or_else(|| "LISTEN_PORT".into())
+            )),
+            ForwardHalf::Connect => Some(format!(
+                "fowl -L LISTEN_PORT:{}:{} {code}",
+                self.remotes
+                    .first()
+                    .and_then(|spec| spec.connect_address.clone())
+                    .unwrap_or_else(|| "HOST".into()),
+                self.remotes
+                    .first()
+                    .and_then(|spec| spec.local_connect_port)
+                    .map(|port| port.to_string())
+                    .unwrap_or_else(|| "PORT".into())
+            )),
+            ForwardHalf::Mixed => None,
+        }
+    }
+
+    pub fn persistent_reuse_command(path: &Path) -> String {
+        format!("fowl tunnel up --state {}", path.display())
+    }
+
+    pub fn persistent_reset_command(&self, code: &str) -> Option<String> {
+        match self.local_half() {
+            ForwardHalf::Listen => {
+                let spec = self.locals.first()?;
+                Some(format!(
+                    "fowl tunnel up --listen {}:{} {} --overwrite",
+                    spec.bind_interface.as_deref().unwrap_or("127.0.0.1"),
+                    spec.local_listen_port
+                        .map(|port| port.to_string())
+                        .unwrap_or_else(|| "PORT".into()),
+                    code
+                ))
+            },
+            ForwardHalf::Connect => {
+                let spec = self.remotes.first()?;
+                Some(format!(
+                    "fowl tunnel up --connect {}:{} {} --overwrite",
+                    spec.connect_address.as_deref().unwrap_or("127.0.0.1"),
+                    spec.local_connect_port
+                        .map(|port| port.to_string())
+                        .unwrap_or_else(|| "PORT".into()),
+                    code
+                ))
+            },
+            ForwardHalf::Mixed => None,
         }
     }
 }
