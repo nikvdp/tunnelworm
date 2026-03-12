@@ -33,6 +33,7 @@ pub struct PersistentKeyMaterial {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistentConfig {
+    pub name: String,
     pub code: String,
     pub mailbox: Option<String>,
     pub role: PersistentRole,
@@ -63,6 +64,12 @@ impl PersistentState {
             return Err(Error::PersistentState(format!(
                 "unsupported state version {}; expected {}",
                 self.version, STATE_VERSION
+            )));
+        }
+        if self.config.name != expected.name {
+            return Err(Error::PersistentState(format!(
+                "state file is bound to tunnel {:?}, not {:?}",
+                self.config.name, expected.name
             )));
         }
         if self.config.code != expected.code {
@@ -101,6 +108,7 @@ impl PersistentConfig {
 
     pub fn from_fowl_join_config(config: &FowlConfig, code: String) -> Self {
         Self {
+            name: persistent_name(config, &code),
             code,
             mailbox: config.mailbox.clone(),
             role: PersistentRole::Join,
@@ -111,6 +119,7 @@ impl PersistentConfig {
 
     pub fn from_fowl_allocate_config(config: &FowlConfig, code: String) -> Self {
         Self {
+            name: persistent_name(config, &code),
             code,
             mailbox: config.mailbox.clone(),
             role: PersistentRole::Allocate,
@@ -138,6 +147,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         }
         let state = load_state(state_path)?;
         let replay_config = FowlConfig {
+            tunnel_name: Some(state.config.name.clone()),
             mailbox: state.config.mailbox.clone(),
             code_length: config.code_length,
             code: Some(state.config.code.clone()),
@@ -252,10 +262,11 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let (state_path, state) = resolve_status_state(config.state.as_deref(), config.code.as_deref(), &cwd)?;
 
-    println!("{} {}", style.heading("Persistent state:"), state.config.code);
+    println!("{} {}", style.heading("Persistent state:"), state.config.name);
     println!("{} {}", style.heading("Local:"), local_forward_role_label(&state.config));
     println!();
     println!("{}", style.heading("State"));
+    println!("  {} {}", style.label("name:"), state.config.name);
     println!("  {}", style.label("file:"));
     println!("    {}", state_path.display());
     println!("  {} {}", style.label("reuse:"), FowlConfig::persistent_reuse_command(&state_path));
@@ -366,7 +377,7 @@ fn resolve_status_state(
             let Ok(state) = load_state(&path) else {
                 continue;
             };
-            if state.config.code == code {
+            if state.config.name == code || state.config.code == code {
                 matches.push((path, state));
             }
         }
@@ -374,7 +385,7 @@ fn resolve_status_state(
 
     match matches.len() {
         0 => Err(Error::PersistentState(format!(
-            "no persistent state was found for code {:?}; rerun `fowl tunnel up` or point `fowl tunnel status` at a specific file with --state",
+            "no persistent state was found for tunnel {:?}; rerun `fowl tunnel up` or point `fowl tunnel status` at a specific file with --state",
             code
         ))),
         1 => Ok(matches.into_iter().next().expect("one match must exist")),
@@ -385,7 +396,7 @@ fn resolve_status_state(
                 .collect::<Vec<_>>()
                 .join(", ");
             Err(Error::PersistentState(format!(
-                "multiple persistent state files use code {:?}: {}. Rerun with --state to inspect one specific local participant.",
+                "multiple persistent state files use tunnel {:?}: {}. Rerun with --state to inspect one specific local participant.",
                 code, paths
             )))
         },
@@ -453,19 +464,8 @@ pub fn save_state(path: &Path, state: &PersistentState) -> Result<()> {
 }
 
 pub fn state_file_name(config: &PersistentConfig) -> Result<String> {
-    let slug = config
-        .code
-        .chars()
-        .map(|ch| match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' => ch.to_ascii_lowercase(),
-            '-' | '_' => '-',
-            _ => '-',
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-    let slug = if slug.is_empty() { "code".into() } else { slug };
-    let fingerprint = serde_json::to_vec(&(&config.code, &config.mailbox, &config.locals, &config.remotes))
+    let slug = slugify_tunnel_name(&config.name);
+    let fingerprint = serde_json::to_vec(&(&config.name, &config.mailbox, &config.locals, &config.remotes))
         .map_err(|error| Error::PersistentState(format!("could not fingerprint state config: {error}")))?;
     Ok(format!("{slug}--{:016x}.json", fnv1a64(&fingerprint)))
 }
@@ -596,6 +596,9 @@ fn print_tunnel_intro(
     config: &FowlConfig,
 ) {
     println!("{} {}", style.heading(heading), code);
+    if let Some(tunnel_name) = &config.tunnel_name {
+        println!("{} {}", style.heading("Tunnel:"), tunnel_name);
+    }
     println!("{} {}", style.heading("Local:"), config.local_summary());
     if let (Some(preferred), Some(ssh_style)) = (
         config.peer_preferred_command(code, true),
@@ -605,6 +608,32 @@ fn print_tunnel_intro(
         println!("{}", style.heading("Peer commands"));
         println!("  {} {}", style.label("preferred:"), preferred);
         println!("  {} {}", style.label("ssh-style:"), ssh_style);
+    }
+}
+
+fn persistent_name(config: &FowlConfig, code: &str) -> String {
+    config
+        .tunnel_name
+        .clone()
+        .unwrap_or_else(|| code.to_string())
+}
+
+fn slugify_tunnel_name(name: &str) -> String {
+    let slug = name
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => ch.to_ascii_lowercase(),
+            '-' | '_' => '-',
+            _ => '-',
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if slug.is_empty() {
+        "tunnel".into()
+    } else {
+        slug
     }
 }
 

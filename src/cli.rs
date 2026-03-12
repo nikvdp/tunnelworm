@@ -61,6 +61,7 @@ Notes:
 
 #[derive(Debug, Clone)]
 pub struct FowlConfig {
+    pub tunnel_name: Option<String>,
     pub mailbox: Option<String>,
     pub code_length: usize,
     pub code: Option<String>,
@@ -72,6 +73,7 @@ pub struct FowlConfig {
 
 #[derive(Debug, Clone)]
 pub struct TunnelStatusConfig {
+    pub name: Option<String>,
     pub code: Option<String>,
     pub state: Option<PathBuf>,
 }
@@ -260,6 +262,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
                     )?))
                 },
                 TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
+                    name: None,
                     code: args.code,
                     state: args.state,
                 })),
@@ -289,6 +292,7 @@ fn build_config(
     }
 
     Ok(FowlConfig {
+        tunnel_name: None,
         mailbox: common.mailbox,
         code_length: common.code_length,
         code,
