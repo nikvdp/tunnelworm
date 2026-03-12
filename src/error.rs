@@ -10,6 +10,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     SerdeJson(#[from] serde_json::Error),
+    #[error(transparent)]
+    Wormhole(#[from] magic_wormhole::WormholeError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
