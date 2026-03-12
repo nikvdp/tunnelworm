@@ -288,10 +288,12 @@ fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option
         for entry in fs::read_dir(&dir)? {
             let entry = entry?;
             let path = entry.path();
-            if !path.is_file() {
+            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
-            let state = load_state(&path)?;
+            let Ok(state) = load_state(&path) else {
+                continue;
+            };
             if matches_creator_config(&state, config) {
                 matches.push((path, state));
             }

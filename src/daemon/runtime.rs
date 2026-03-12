@@ -1,8 +1,13 @@
 use async_channel::{Receiver, Sender};
 use async_std::{io, prelude::*, task};
+use fs2::FileExt;
 use futures::{FutureExt, select};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    fs::{File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     cli::stderr_style,
@@ -355,6 +360,7 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
 }
 
 pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
+    let _lock = acquire_persistent_state_lock(&_state_path)?;
     let mut state = load_state(&_state_path)?;
     if state.peer_public_key_hex.is_none() {
         return Err(Error::PersistentState(
@@ -445,6 +451,26 @@ fn reconnect_role(state: &crate::persistent::PersistentState) -> PersistentRole 
         },
         None => state.config.role,
     }
+}
+
+fn acquire_persistent_state_lock(state_path: &Path) -> Result<File> {
+    let lock_path = state_path.with_extension("lock");
+    let mut lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+
+    lock_file.try_lock_exclusive().map_err(|_| {
+        Error::PersistentState(format!(
+            "persistent worker is already running for {}; stop the existing process or wait for it to exit before starting this saved tunnel side again",
+            state_path.display()
+        ))
+    })?;
+
+    lock_file.set_len(0)?;
+    writeln!(lock_file, "pid={}", std::process::id())?;
+    Ok(lock_file)
 }
 
 fn next_retry_delay(error: &Error, retry_delay: u64) -> u64 {
