@@ -16,6 +16,7 @@ Create a TCP port forward between two terminals over a magic-wormhole session.
 Top-level `fowl ...` is the one-off path.
 `fowl tunnel create ...` bootstraps a named persistent tunnel.
 `fowl tunnel up ...` starts a saved persistent tunnel by name.
+`fowl tunnel list`, `status`, and `delete` manage saved tunnel endpoints.
 
 One side provides `--listen` and the peer provides `--connect`.
 If you use SSH-style compatibility syntax instead, `-L` still needs a
@@ -41,8 +42,14 @@ Examples:
   Start one saved tunnel endpoint later by explicit state path:
     fowl tunnel up --state ./.fowl/office-ssh--abcd1234.json
 
-  Inspect one saved tunnel endpoint directly:
-    fowl tunnel status --state ./.fowl/office-ssh--abcd1234.json
+  Inspect one saved tunnel endpoint by name:
+    fowl tunnel status office-ssh
+
+  List saved tunnel endpoints:
+    fowl tunnel list
+
+  Delete one saved tunnel endpoint:
+    fowl tunnel delete office-ssh
 
   SSH-style compatibility syntax still works for one-off flows:
     fowl -R 9000:localhost:22
@@ -69,7 +76,6 @@ pub struct FowlConfig {
 #[derive(Debug, Clone)]
 pub struct TunnelStatusConfig {
     pub name: Option<String>,
-    pub code: Option<String>,
     pub state: Option<PathBuf>,
 }
 
@@ -80,11 +86,19 @@ pub struct TunnelUpConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct TunnelDeleteConfig {
+    pub name: Option<String>,
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
 pub enum FowlInvocation {
     Run(FowlConfig),
     TunnelCreate(FowlConfig),
     TunnelUp(TunnelUpConfig),
+    TunnelList,
     TunnelStatus(TunnelStatusConfig),
+    TunnelDelete(TunnelDeleteConfig),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,8 +216,12 @@ pub enum TunnelCommand {
     Create(TunnelCreateArgs),
     #[command(about = "Start one saved side of a persistent tunnel")]
     Up(TunnelUpArgs),
+    #[command(about = "List saved persistent tunnel endpoints")]
+    List,
     #[command(about = "Inspect persistent tunnel state without starting the tunnel")]
     Status(TunnelStatusArgs),
+    #[command(about = "Delete one saved persistent tunnel endpoint")]
+    Delete(TunnelDeleteArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -231,9 +249,18 @@ pub struct TunnelUpArgs {
 #[derive(Debug, Clone, Args)]
 #[command(about = "Inspect the stored state for one local tunnel participant")]
 pub struct TunnelStatusArgs {
-    #[arg(long = "code", value_name = "CODE", required_unless_present = "state", help = "Inspect the persistent tunnel state associated with this code")]
-    pub code: Option<String>,
-    #[arg(long = "state", value_name = "PATH", required_unless_present = "code", help = "Inspect an explicit persistent state file path")]
+    #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to inspect")]
+    pub name: Option<String>,
+    #[arg(long = "state", value_name = "PATH", required_unless_present = "name", help = "Inspect an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "Delete one saved persistent tunnel endpoint")]
+pub struct TunnelDeleteArgs {
+    #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to delete")]
+    pub name: Option<String>,
+    #[arg(long = "state", value_name = "PATH", required_unless_present = "name", help = "Delete an explicit persistent state file path")]
     pub state: Option<PathBuf>,
 }
 
@@ -274,9 +301,13 @@ impl TryFrom<FowlCli> for FowlInvocation {
                     name: args.name,
                     state: args.state,
                 })),
+                TunnelCommand::List => Ok(Self::TunnelList),
                 TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
-                    name: None,
-                    code: args.code,
+                    name: args.name,
+                    state: args.state,
+                })),
+                TunnelCommand::Delete(args) => Ok(Self::TunnelDelete(TunnelDeleteConfig {
+                    name: args.name,
                     state: args.state,
                 })),
             },

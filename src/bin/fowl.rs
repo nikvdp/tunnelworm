@@ -20,7 +20,9 @@ async fn main() {
         FowlInvocation::Run(config) => fowl_rs::session::run_fowl(config).await,
         FowlInvocation::TunnelCreate(config) => persistent::create_named_tunnel(&config).await,
         FowlInvocation::TunnelUp(config) => persistent::up_named_tunnel(&config),
+        FowlInvocation::TunnelList => persistent::list_named_tunnels(),
         FowlInvocation::TunnelStatus(config) => persistent::print_status(&config),
+        FowlInvocation::TunnelDelete(config) => persistent::delete_named_tunnel(&config),
     };
 
     if let Err(error) = result {

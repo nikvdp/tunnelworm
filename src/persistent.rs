@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, FowlConfig, TunnelStatusConfig, TunnelUpConfig},
+    cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelStatusConfig, TunnelUpConfig},
     error::{Error, Result},
     persistent_auth,
     session::{self, SessionOptions},
@@ -233,10 +233,39 @@ pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
     exec_persistent_daemon(&state_path)
 }
 
+pub fn list_named_tunnels() -> Result<()> {
+    let style = stdout_style();
+    let cwd = env::current_dir()?;
+    let entries = list_saved_tunnels(&cwd)?;
+
+    println!("{}", style.heading("Saved tunnels"));
+    if entries.is_empty() {
+        println!("  none");
+        return Ok(());
+    }
+
+    for (state_path, state) in entries {
+        let running = if state_path.with_extension("lock").exists() {
+            "yes"
+        } else {
+            "no"
+        };
+        println!();
+        println!("  {}", style.label(&state.config.name));
+        println!("    {} {}", style.label("role:"), local_forward_role_label(&state.config));
+        println!("    {} {}", style.label("endpoint:"), local_endpoint_label(&state.config));
+        println!("    {} {}", style.label("running?:"), running);
+        println!("    {} {}", style.label("file:"), state_path.display());
+    }
+
+    Ok(())
+}
+
 pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     let style = stdout_style();
     let cwd = env::current_dir()?;
-    let (state_path, state) = resolve_status_state(config.state.as_deref(), config.code.as_deref(), &cwd)?;
+    let (state_path, state) =
+        resolve_status_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
 
     println!("{} {}", style.heading("Persistent state:"), state.config.name);
     println!("{} {}", style.heading("Local:"), local_forward_role_label(&state.config));
@@ -245,9 +274,23 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     println!("  {} {}", style.label("name:"), state.config.name);
     println!("  {}", style.label("file:"));
     println!("    {}", state_path.display());
-    println!("  {} {}", style.label("reuse:"), FowlConfig::persistent_reuse_command(&state_path));
+    println!("  {} fowl tunnel up {}", style.label("reuse:"), state.config.name);
+    println!(
+        "  {} fowl tunnel delete {}",
+        style.label("delete:"),
+        state.config.name
+    );
     println!("  {} {}", style.label("bootstrap:"), bootstrap_role_label(state.config.role));
     println!("  {} {}", style.label("endpoint:"), local_endpoint_label(&state.config));
+    println!(
+        "  {} {}",
+        style.label("running?:"),
+        if state_path.with_extension("lock").exists() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
     println!(
         "  {} {}",
         style.label("mailbox:"),
@@ -262,6 +305,24 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
         style.label("peer key:"),
         peer_key_fingerprint(state.peer_public_key_hex.as_deref())
     );
+
+    Ok(())
+}
+
+pub fn delete_named_tunnel(config: &TunnelDeleteConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let (state_path, state) =
+        resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let lock_path = state_path.with_extension("lock");
+
+    fs::remove_file(&state_path)?;
+    if lock_path.exists() {
+        let _ = fs::remove_file(&lock_path);
+    }
+
+    let style = stdout_style();
+    println!("{} {}", style.heading("Deleted:"), state.config.name);
+    println!("  {} {}", style.label("file:"), state_path.display());
 
     Ok(())
 }
@@ -298,25 +359,10 @@ fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option
 }
 
 fn find_state_by_name(cwd: &Path, name: &str) -> Result<Option<(PathBuf, PersistentState)>> {
-    let mut matches = Vec::new();
-    for dir in [project_state_dir(cwd), user_state_dir()?] {
-        if !dir.exists() {
-            continue;
-        }
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(state) = load_state(&path) else {
-                continue;
-            };
-            if state.config.name == name {
-                matches.push((path, state));
-            }
-        }
-    }
+    let matches = list_saved_tunnels(cwd)?
+        .into_iter()
+        .filter(|(_, state)| state.config.name == name)
+        .collect::<Vec<_>>();
 
     match matches.len() {
         0 => Ok(None),
@@ -336,78 +382,17 @@ fn matches_creator_config(state: &PersistentState, config: &FowlConfig) -> bool 
         && state.config.remotes == config.remotes
 }
 
-fn matches_local_participant(state: &PersistentState, config: &FowlConfig, code: &str) -> bool {
-    state.version == STATE_VERSION
-        && state.config.code == code
-        && state.config.mailbox == config.mailbox
-        && state.config.locals == config.locals
-        && state.config.remotes == config.remotes
-}
-
 fn resolve_status_state(
     explicit: Option<&Path>,
-    code: Option<&str>,
+    name: Option<&str>,
     cwd: &Path,
 ) -> Result<(PathBuf, PersistentState)> {
-    if let Some(path) = explicit {
-        if !path.exists() {
-            return Err(Error::PersistentState(format!(
-                "persistent state file not found at {}",
-                path.display()
-            )));
-        }
-        let state = load_state(path).map_err(|error| match error {
-            Error::SerdeJson(_) | Error::PersistentState(_) => Error::PersistentState(format!(
-                "could not read persistent state at {}: {error}",
-                path.display()
-            )),
-            other => other,
-        })?;
-        return Ok((path.to_path_buf(), state));
-    }
-
-    let code = code.ok_or_else(|| {
-        Error::PersistentState("tunnel status needs either --state or --code".into())
-    })?;
-    let mut matches = Vec::new();
-
-    for dir in [project_state_dir(cwd), user_state_dir()?] {
-        if !dir.exists() {
-            continue;
-        }
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Ok(state) = load_state(&path) else {
-                continue;
-            };
-            if state.config.name == code || state.config.code == code {
-                matches.push((path, state));
-            }
-        }
-    }
-
-    match matches.len() {
-        0 => Err(Error::PersistentState(format!(
-            "no persistent state was found for tunnel {:?}; rerun `fowl tunnel up` or point `fowl tunnel status` at a specific file with --state",
-            code
-        ))),
-        1 => Ok(matches.into_iter().next().expect("one match must exist")),
-        _ => {
-            let paths = matches
-                .iter()
-                .map(|(path, _)| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(Error::PersistentState(format!(
-                "multiple persistent state files use tunnel {:?}: {}. Rerun with --state to inspect one specific local participant.",
-                code, paths
-            )))
+    resolve_named_state(explicit, name, cwd).map_err(|error| match error {
+        Error::PersistentState(message) if message.contains("tunnel up needs either") => {
+            Error::PersistentState("tunnel status needs either a tunnel name or --state".into())
         },
-    }
+        other => other,
+    })
 }
 
 fn resolve_named_state(
@@ -476,18 +461,26 @@ pub fn load_matching_state(path: &Path, expected: &PersistentConfig) -> Result<P
     Ok(state)
 }
 
-fn load_matching_join_state(path: &Path, expected: &PersistentConfig) -> Result<PersistentState> {
-    let state = load_matching_state(path, expected).map_err(|error| match error {
-        Error::PersistentState(message) => conflicting_state_error(path, &message),
-        other => other,
-    })?;
-    if state.peer_public_key_hex.is_none() {
-        return Err(conflicting_state_error(
-            path,
-            "existing persistent state is missing the trusted peer identity",
-        ));
+fn list_saved_tunnels(cwd: &Path) -> Result<Vec<(PathBuf, PersistentState)>> {
+    let mut entries = Vec::new();
+    for dir in [project_state_dir(cwd), user_state_dir()?] {
+        if !dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(state) = load_state(&path) else {
+                continue;
+            };
+            entries.push((path, state));
+        }
     }
-    Ok(state)
+    entries.sort_by(|left, right| left.1.config.name.cmp(&right.1.config.name));
+    Ok(entries)
 }
 
 pub fn load_state(path: &Path) -> Result<PersistentState> {
@@ -640,14 +633,29 @@ fn print_tunnel_intro(
         println!("{} {}", style.heading("Tunnel:"), tunnel_name);
     }
     println!("{} {}", style.heading("Local:"), config.local_summary());
-    if let (Some(preferred), Some(ssh_style)) = (
-        config.peer_preferred_command(code, true),
-        config.peer_ssh_command(code),
-    ) {
+    if heading == "Tunnel create:" {
         println!();
         println!("{}", style.heading("Peer commands"));
-        println!("  {} {}", style.label("preferred:"), preferred);
-        println!("  {} {}", style.label("ssh-style:"), ssh_style);
+        match config.local_half() {
+            crate::cli::ForwardHalf::Listen => {
+                println!(
+                    "  {} fowl tunnel create PEER_NAME --connect HOST:PORT --invite {}",
+                    style.label("preferred:"),
+                    code
+                );
+            },
+            crate::cli::ForwardHalf::Connect => {
+                println!(
+                    "  {} fowl tunnel create PEER_NAME --listen LISTEN_HOST:LISTEN_PORT --invite {}",
+                    style.label("preferred:"),
+                    code
+                );
+            },
+            crate::cli::ForwardHalf::Mixed => {},
+        }
+        if let Some(ssh_style) = config.peer_ssh_command(code) {
+            println!("  {} {}", style.label("ssh-style:"), ssh_style);
+        }
     }
 }
 
@@ -693,6 +701,16 @@ fn print_state_block(
             style.label("reuse:"),
             tunnel_name
         );
+        println!(
+            "  {} fowl tunnel status {}",
+            style.label("status:"),
+            tunnel_name
+        );
+        println!(
+            "  {} fowl tunnel delete {}",
+            style.label("delete:"),
+            tunnel_name
+        );
     } else {
         println!(
             "  {} {}",
@@ -701,7 +719,7 @@ fn print_state_block(
         );
     }
     if let Some(reset_command) = config.persistent_reset_command(code) {
-        println!("  {} {}", style.label("reset:"), reset_command);
+        println!("  {} {}", style.label("replace:"), reset_command);
     }
 }
 
