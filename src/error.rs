@@ -6,6 +6,8 @@ pub enum Error {
     NotImplemented(&'static str),
     #[error("usage error: {0}")]
     Usage(String),
+    #[error("session error: {0}")]
+    Session(String),
     #[error("persistent state error: {0}")]
     PersistentState(String),
     #[error("authentication error: {0}")]

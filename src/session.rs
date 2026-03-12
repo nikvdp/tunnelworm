@@ -19,6 +19,7 @@ pub struct SessionOptions {
     pub mailbox: Option<String>,
     pub code_length: usize,
     pub code: Option<String>,
+    pub allocate_on_connect: bool,
 }
 
 pub struct PreparedSession {
@@ -46,6 +47,7 @@ impl From<&FowlConfig> for SessionOptions {
             mailbox: value.mailbox.clone(),
             code_length: value.code_length,
             code: value.code.clone(),
+            allocate_on_connect: false,
         }
     }
 }
@@ -72,15 +74,53 @@ fn default_relay_hints() -> Vec<RelayHint> {
 pub async fn prepare_session(options: SessionOptions) -> Result<PreparedSession> {
     let config = app_config(options.mailbox.as_deref());
     let relay_hints = default_relay_hints();
+    let mailbox_label = options
+        .mailbox
+        .clone()
+        .unwrap_or_else(|| "the default rendezvous server".into());
 
     let (mailbox_connection, code_was_allocated) = match options.code {
         Some(code) => {
             let code = code
                 .parse::<Code>()
                 .map_err(|error| Error::Usage(format!("invalid wormhole code: {error}")))?;
-            (MailboxConnection::connect(config, code, true).await?, false)
+            let code_string = code.to_string();
+            let mailbox_connection = match MailboxConnection::connect(config, code.clone(), false).await {
+                Ok(mailbox_connection) => mailbox_connection,
+                Err(join_error) if options.allocate_on_connect => {
+                    MailboxConnection::connect(
+                        app_config(options.mailbox.as_deref()),
+                        code,
+                        true,
+                    )
+                    .await
+                    .map_err(|retry_error| {
+                        Error::Session(format!(
+                            "could not reconnect creator wormhole code {:?} via {}. Join error: {join_error:?}. Retry error: {retry_error:?}",
+                            code_string, mailbox_label
+                        ))
+                    })?
+                },
+                Err(error) => {
+                    return Err(Error::Session(format!(
+                        "could not join wormhole code {:?} via {}. Original error: {error:?}",
+                        code_string, mailbox_label
+                    )));
+                },
+            };
+            (mailbox_connection, false)
         },
-        None => (MailboxConnection::create(config, options.code_length).await?, true),
+        None => {
+            let mailbox_connection = MailboxConnection::create(config, options.code_length)
+                .await
+                .map_err(|error| {
+                    Error::Session(format!(
+                        "could not allocate a new wormhole code via {}. Original error: {error:?}",
+                        mailbox_label
+                    ))
+                })?;
+            (mailbox_connection, true)
+        },
     };
 
     let welcome = mailbox_connection.welcome().map(ToOwned::to_owned);

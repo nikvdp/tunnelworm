@@ -142,6 +142,14 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         return exec_persistent_daemon(&state_path);
     }
 
+    if let Some((state_path, state)) =
+        find_existing_creator_state(config.state.as_deref(), &cwd, config)?
+    {
+        println!("Reusing persistent wormhole code: {}", state.config.code);
+        println!("Persistent state file: {}", state_path.display());
+        return exec_persistent_daemon(&state_path);
+    }
+
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
     println!("Persistent wormhole code: {}", prepared.code);
     println!("Reuse this code on the peer and on future persistent restarts.");
@@ -153,6 +161,61 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     save_state(&state_path, &state)?;
     println!("Persistent state file: {}", state_path.display());
     exec_persistent_daemon(&state_path)
+}
+
+fn find_existing_creator_state(
+    explicit: Option<&Path>,
+    cwd: &Path,
+    config: &FowlConfig,
+) -> Result<Option<(PathBuf, PersistentState)>> {
+    if let Some(path) = explicit {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let state = load_state(path)?;
+        if !matches_creator_config(&state, config) {
+            return Err(Error::PersistentState(format!(
+                "explicit state file {:?} does not match this persistent creator command",
+                path
+            )));
+        }
+        return Ok(Some((path.to_path_buf(), state)));
+    }
+
+    let mut matches = Vec::new();
+    for dir in [project_state_dir(cwd), user_state_dir()?] {
+        if !dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let state = load_state(&path)?;
+            if matches_creator_config(&state, config) {
+                matches.push((path, state));
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.into_iter().next()),
+        _ => Err(Error::PersistentState(
+            "multiple persistent creator states match this command; use --state to pick one"
+                .into(),
+        )),
+    }
+}
+
+fn matches_creator_config(state: &PersistentState, config: &FowlConfig) -> bool {
+    state.version == STATE_VERSION
+        && state.config.role == PersistentRole::Allocate
+        && state.config.mailbox == config.mailbox
+        && state.config.locals == config.locals
+        && state.config.remotes == config.remotes
 }
 
 pub fn resolve_state_path(

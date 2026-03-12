@@ -173,11 +173,13 @@ async fn session_task(
                 mailbox: config.mailbox.clone(),
                 code_length,
                 code: None,
+                allocate_on_connect: false,
             },
             StartMode::SetCode { code } => SessionOptions {
                 mailbox: config.mailbox.clone(),
                 code_length: config.code_length,
                 code: Some(code),
+                allocate_on_connect: false,
             },
         };
 
@@ -371,6 +373,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 mailbox: state.config.mailbox.clone(),
                 code_length: 2,
                 code: Some(state.config.code.clone()),
+                allocate_on_connect: matches!(state.config.role, crate::persistent::PersistentRole::Allocate),
             })
             .await?;
 
