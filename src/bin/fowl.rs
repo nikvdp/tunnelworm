@@ -18,7 +18,8 @@ async fn main() {
 
     let result = match invocation {
         FowlInvocation::Run(config) => fowl_rs::session::run_fowl(config).await,
-        FowlInvocation::TunnelUp(config) => persistent::initialize_or_exec(&config).await,
+        FowlInvocation::TunnelCreate(config) => persistent::create_named_tunnel(&config).await,
+        FowlInvocation::TunnelUp(config) => persistent::up_named_tunnel(&config),
         FowlInvocation::TunnelStatus(config) => persistent::print_status(&config),
     };
 

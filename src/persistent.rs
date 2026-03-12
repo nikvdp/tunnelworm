@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, FowlConfig, TunnelStatusConfig},
+    cli::{stdout_style, FowlConfig, TunnelStatusConfig, TunnelUpConfig},
     error::{Error, Result},
     persistent_auth,
     session::{self, SessionOptions},
@@ -129,78 +129,33 @@ impl PersistentConfig {
     }
 }
 
-pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
+pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
+    let tunnel_name = config
+        .tunnel_name
+        .as_deref()
+        .ok_or_else(|| Error::Usage("tunnel create needs a local tunnel name".into()))?;
 
-    if config.code.is_none() && config.locals.is_empty() && config.remotes.is_empty() {
-        let state_path = config.state.as_deref().ok_or_else(|| {
-            Error::Usage(
-                "reusing a persistent side without retyping the forward requires --state <PATH>"
-                    .into(),
-            )
-        })?;
-        if config.overwrite {
-            return Err(Error::Usage(
-                "--overwrite needs an explicit forward definition; it cannot be used with --state-only reuse".into(),
-            ));
+    if let Some((existing_path, _)) = find_state_by_name(&cwd, tunnel_name)? {
+        if !config.overwrite {
+            return Err(Error::PersistentState(format!(
+                "a saved tunnel named {:?} already exists at {}. Use `fowl tunnel up {}` to start it, `fowl tunnel delete {}` to remove it later, or rerun `fowl tunnel create {}` with --overwrite to replace it.",
+                tunnel_name,
+                existing_path.display(),
+                tunnel_name,
+                tunnel_name,
+                tunnel_name
+            )));
         }
-        let state = load_state(state_path)?;
-        let replay_config = FowlConfig {
-            tunnel_name: Some(state.config.name.clone()),
-            mailbox: state.config.mailbox.clone(),
-            code_length: config.code_length,
-            code: Some(state.config.code.clone()),
-            locals: state.config.locals.clone(),
-            remotes: state.config.remotes.clone(),
-            state: Some(state_path.to_path_buf()),
-            overwrite: false,
-        };
-        print_tunnel_intro(&style, "Persistent reuse:", &state.config.code, &replay_config);
-        print_state_block(&style, &replay_config, state_path, &state.config.code);
-        println!();
-        println!("{} handing off to the persistent worker...", style.status("Status:"));
-        return exec_persistent_daemon(state_path);
+        println!("Overwriting existing persistent state at {}.", existing_path.display());
+        fs::remove_file(existing_path)?;
     }
 
     if let Some(code) = &config.code {
         let expected = PersistentConfig::from_fowl_join_config(config, code.clone());
         let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
-
-        if state_path.exists() {
-            if config.overwrite {
-                print_tunnel_intro(&style, "Persistent join:", &expected.code, config);
-                print_state_block(&style, config, &state_path, &expected.code);
-                println!();
-                println!(
-                    "Overwriting existing persistent state at {}.",
-                    state_path.display()
-                );
-            } else {
-                let existing_state = load_state(&state_path)?;
-                if matches_local_participant(&existing_state, config, code) {
-                    if existing_state.peer_public_key_hex.is_none() {
-                        return Err(conflicting_state_error(
-                            &state_path,
-                            "existing persistent state is missing the trusted peer identity",
-                        ));
-                    }
-                    print_tunnel_intro(&style, "Persistent reuse:", &existing_state.config.code, config);
-                    print_state_block(&style, config, &state_path, &existing_state.config.code);
-                    println!();
-                    println!("{} handing off to the persistent worker...", style.status("Status:"));
-                    return exec_persistent_daemon(&state_path);
-                }
-                print_tunnel_intro(&style, "Persistent join:", &expected.code, config);
-                print_state_block(&style, config, &state_path, &expected.code);
-                println!();
-                println!("{} waiting for the persistent peer...", style.status("Status:"));
-                load_matching_join_state(&state_path, &expected)?;
-                return exec_persistent_daemon(&state_path);
-            }
-        }
-
-        print_tunnel_intro(&style, "Persistent join:", &expected.code, config);
+        print_tunnel_intro(&style, "Tunnel create:", &expected.code, config);
         print_state_block(&style, config, &state_path, &expected.code);
         println!();
         println!("{} waiting for the persistent peer...", style.status("Status:"));
@@ -246,7 +201,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
     let expected = PersistentConfig::from_fowl_allocate_config(config, prepared.code.clone());
     let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
-    print_tunnel_intro(&style, "Persistent create:", &prepared.code, config);
+    print_tunnel_intro(&style, "Tunnel create:", &prepared.code, config);
     print_state_block(&style, config, &state_path, &prepared.code);
     println!();
     println!("{} waiting for the persistent peer...", style.status("Status:"));
@@ -254,6 +209,27 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     let mut connected = prepared.connect().await?;
     session::authenticate_persistent_peer(&mut connected, &mut state).await?;
     save_state(&state_path, &state)?;
+    exec_persistent_daemon(&state_path)
+}
+
+pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let style = stdout_style();
+    let (state_path, state) = resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let replay_config = FowlConfig {
+        tunnel_name: Some(state.config.name.clone()),
+        mailbox: state.config.mailbox.clone(),
+        code_length: 2,
+        code: Some(state.config.code.clone()),
+        locals: state.config.locals.clone(),
+        remotes: state.config.remotes.clone(),
+        state: Some(state_path.clone()),
+        overwrite: false,
+    };
+    print_tunnel_intro(&style, "Persistent reuse:", &state.config.code, &replay_config);
+    print_state_block(&style, &replay_config, &state_path, &state.config.code);
+    println!();
+    println!("{} handing off to the persistent worker...", style.status("Status:"));
     exec_persistent_daemon(&state_path)
 }
 
@@ -318,6 +294,37 @@ fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option
             "multiple persistent creator states match this command; use --state to pick one or --overwrite with --state to replace a specific file"
                 .into(),
         )),
+    }
+}
+
+fn find_state_by_name(cwd: &Path, name: &str) -> Result<Option<(PathBuf, PersistentState)>> {
+    let mut matches = Vec::new();
+    for dir in [project_state_dir(cwd), user_state_dir()?] {
+        if !dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(state) = load_state(&path) else {
+                continue;
+            };
+            if state.config.name == name {
+                matches.push((path, state));
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.into_iter().next()),
+        _ => Err(Error::PersistentState(format!(
+            "multiple saved tunnel endpoints use the local name {:?}; use --state to select one specific file",
+            name
+        ))),
     }
 }
 
@@ -401,6 +408,39 @@ fn resolve_status_state(
             )))
         },
     }
+}
+
+fn resolve_named_state(
+    explicit: Option<&Path>,
+    name: Option<&str>,
+    cwd: &Path,
+) -> Result<(PathBuf, PersistentState)> {
+    if let Some(path) = explicit {
+        if !path.exists() {
+            return Err(Error::PersistentState(format!(
+                "persistent state file not found at {}",
+                path.display()
+            )));
+        }
+        let state = load_state(path).map_err(|error| match error {
+            Error::SerdeJson(_) | Error::PersistentState(_) => Error::PersistentState(format!(
+                "could not read persistent state at {}: {error}",
+                path.display()
+            )),
+            other => other,
+        })?;
+        return Ok((path.to_path_buf(), state));
+    }
+
+    let name = name.ok_or_else(|| {
+        Error::PersistentState("tunnel up needs either a tunnel name or --state".into())
+    })?;
+    find_state_by_name(cwd, name)?.ok_or_else(|| {
+        Error::PersistentState(format!(
+            "no saved tunnel endpoint named {:?} was found; create it first with `fowl tunnel create {}` or point `fowl tunnel up` at a specific file with --state",
+            name, name
+        ))
+    })
 }
 
 pub fn resolve_state_path(
@@ -647,11 +687,19 @@ fn print_state_block(
     println!("{}", style.heading("State"));
     println!("  {}", style.label("file:"));
     println!("    {}", state_path.display());
-    println!(
-        "  {} {}",
-        style.label("reuse:"),
-        FowlConfig::persistent_reuse_command(state_path)
-    );
+    if let Some(tunnel_name) = &config.tunnel_name {
+        println!(
+            "  {} fowl tunnel up {}",
+            style.label("reuse:"),
+            tunnel_name
+        );
+    } else {
+        println!(
+            "  {} {}",
+            style.label("reuse:"),
+            FowlConfig::persistent_reuse_command(state_path)
+        );
+    }
     if let Some(reset_command) = config.persistent_reset_command(code) {
         println!("  {} {}", style.label("reset:"), reset_command);
     }

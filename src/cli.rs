@@ -14,7 +14,8 @@ const FOWL_LONG_ABOUT: &str = "\
 Create a TCP port forward between two terminals over a magic-wormhole session.
 
 Top-level `fowl ...` is the one-off path.
-`fowl tunnel up ...` is the persistent tunnel path.
+`fowl tunnel create ...` bootstraps a named persistent tunnel.
+`fowl tunnel up ...` starts a saved persistent tunnel by name.
 
 One side provides `--listen` and the peer provides `--connect`.
 If you use SSH-style compatibility syntax instead, `-L` still needs a
@@ -28,26 +29,20 @@ Examples:
   Matching one-off peer listens locally with that code:
     fowl --listen 127.0.0.1:9000 7-cobalt-signal
 
-  Persistent tunnel, creator side allocates a reusable code:
-    fowl tunnel up --connect localhost:22
+  Named persistent tunnel, creator side bootstraps a saved tunnel:
+    fowl tunnel create office-ssh --connect localhost:22
 
-  Persistent tunnel, join side reuses that code with a positional CODE:
-    fowl tunnel up --listen 127.0.0.1:9000 7-cobalt-signal
+  Named persistent tunnel, peer side joins with the one-time invite:
+    fowl tunnel create laptop-ssh --listen 127.0.0.1:9000 --invite 7-cobalt-signal
 
-  The same persistent join using `--code` also works:
-    fowl tunnel up --listen 127.0.0.1:9000 --code 7-cobalt-signal
+  Start one saved tunnel endpoint later by name:
+    fowl tunnel up office-ssh
 
-  Replace conflicting local persistent state for that code:
-    fowl tunnel up --listen 127.0.0.1:9000 7-cobalt-signal --overwrite
+  Start one saved tunnel endpoint later by explicit state path:
+    fowl tunnel up --state ./.fowl/office-ssh--abcd1234.json
 
-  Inspect the stored state for one local participant:
-    fowl tunnel status --state ./.fowl/7-cobalt-signal--abcd1234.json
-
-  Reuse that saved persistent side later without retyping the forward:
-    fowl tunnel up --state ./.fowl/7-cobalt-signal--abcd1234.json
-
-  Inspect a tunnel by code when only one local state matches:
-    fowl tunnel status --code 7-cobalt-signal
+  Inspect one saved tunnel endpoint directly:
+    fowl tunnel status --state ./.fowl/office-ssh--abcd1234.json
 
   SSH-style compatibility syntax still works for one-off flows:
     fowl -R 9000:localhost:22
@@ -79,9 +74,16 @@ pub struct TunnelStatusConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct TunnelUpConfig {
+    pub name: Option<String>,
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
 pub enum FowlInvocation {
     Run(FowlConfig),
-    TunnelUp(FowlConfig),
+    TunnelCreate(FowlConfig),
+    TunnelUp(TunnelUpConfig),
     TunnelStatus(TunnelStatusConfig),
 }
 
@@ -196,25 +198,34 @@ pub struct TunnelArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TunnelCommand {
-    #[command(about = "Create or resume a persistent tunnel sidecar")]
+    #[command(about = "Create one named side of a persistent tunnel")]
+    Create(TunnelCreateArgs),
+    #[command(about = "Start one saved side of a persistent tunnel")]
     Up(TunnelUpArgs),
     #[command(about = "Inspect persistent tunnel state without starting the tunnel")]
     Status(TunnelStatusArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-#[command(about = "Create or resume one side of a persistent tunnel")]
-pub struct TunnelUpArgs {
+#[command(about = "Create one named side of a persistent tunnel")]
+pub struct TunnelCreateArgs {
+    #[arg(value_name = "NAME", help = "Local name for this saved tunnel endpoint")]
+    pub name: String,
     #[command(flatten)]
     pub common: CommonSessionArgs,
-    #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
-    pub state: Option<PathBuf>,
-    #[arg(long = "overwrite", help = "Replace conflicting local persistent state for this code or state file instead of refusing to start")]
+    #[arg(long = "invite", value_name = "CODE", help = "Join an existing bootstrap invite instead of allocating a new one")]
+    pub invite: Option<String>,
+    #[arg(long = "overwrite", help = "Replace an existing saved tunnel endpoint with the same local name")]
     pub overwrite: bool,
-    #[arg(long = "code", value_name = "CODE", conflicts_with = "positional_code", help = "Join an existing persistent tunnel code instead of allocating one")]
-    pub code_flag: Option<String>,
-    #[arg(value_name = "CODE", conflicts_with = "code_flag", help = "Existing persistent tunnel code to join; omit it to allocate one")]
-    pub positional_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "Start one saved side of a persistent tunnel")]
+pub struct TunnelUpArgs {
+    #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to start")]
+    pub name: Option<String>,
+    #[arg(long = "state", value_name = "PATH", required_unless_present = "name", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -251,16 +262,18 @@ impl TryFrom<FowlCli> for FowlInvocation {
     fn try_from(value: FowlCli) -> Result<Self> {
         match value.command {
             Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
-                TunnelCommand::Up(args) => {
-                    let allow_empty_forwards = args.state.is_some();
-                    Ok(Self::TunnelUp(build_config(
-                        args.common,
-                        resolve_tunnel_up_code(args.positional_code, args.code_flag)?,
-                        args.state,
-                        args.overwrite,
-                        allow_empty_forwards,
-                    )?))
-                },
+                TunnelCommand::Create(args) => Ok(Self::TunnelCreate(build_config(
+                    args.common,
+                    args.invite,
+                    None,
+                    args.overwrite,
+                    false,
+                    Some(args.name),
+                )?)),
+                TunnelCommand::Up(args) => Ok(Self::TunnelUp(TunnelUpConfig {
+                    name: args.name,
+                    state: args.state,
+                })),
                 TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
                     name: None,
                     code: args.code,
@@ -273,6 +286,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
                 value.top_level.state,
                 false,
                 false,
+                None,
             )?)),
         }
     }
@@ -284,6 +298,7 @@ fn build_config(
     state: Option<PathBuf>,
     overwrite: bool,
     allow_empty_forwards: bool,
+    tunnel_name: Option<String>,
 ) -> Result<FowlConfig> {
     let (locals, remotes) = parse_forward_args(common.forwards, allow_empty_forwards)?;
 
@@ -292,7 +307,7 @@ fn build_config(
     }
 
     Ok(FowlConfig {
-        tunnel_name: None,
+        tunnel_name,
         mailbox: common.mailbox,
         code_length: common.code_length,
         code,
@@ -419,43 +434,36 @@ impl FowlConfig {
     }
 
     pub fn persistent_reset_command(&self, code: &str) -> Option<String> {
+        let tunnel_name = self.tunnel_name.as_deref().unwrap_or(code);
         match self.local_half() {
             ForwardHalf::Listen => {
                 let spec = self.locals.first()?;
                 Some(format!(
-                    "fowl tunnel up --listen {}:{} {} --overwrite",
+                    "fowl tunnel create {} --listen {}:{} --overwrite",
+                    tunnel_name,
                     spec.bind_interface.as_deref().unwrap_or("127.0.0.1"),
                     spec.local_listen_port
                         .map(|port| port.to_string())
-                        .unwrap_or_else(|| "PORT".into()),
-                    code
+                        .unwrap_or_else(|| "PORT".into())
                 ))
             },
             ForwardHalf::Connect => {
                 let spec = self.remotes.first()?;
-                Some(format!(
-                    "fowl tunnel up --connect {}:{} {} --overwrite",
+                let base = format!(
+                    "fowl tunnel create {} --connect {}:{}",
+                    tunnel_name,
                     spec.connect_address.as_deref().unwrap_or("127.0.0.1"),
                     spec.local_connect_port
                         .map(|port| port.to_string())
-                        .unwrap_or_else(|| "PORT".into()),
-                    code
-                ))
+                        .unwrap_or_else(|| "PORT".into())
+                );
+                if self.code.is_some() {
+                    Some(format!("{base} --invite {code} --overwrite"))
+                } else {
+                    Some(format!("{base} --overwrite"))
+                }
             },
             ForwardHalf::Mixed => None,
         }
-    }
-}
-
-fn resolve_tunnel_up_code(
-    positional_code: Option<String>,
-    code_flag: Option<String>,
-) -> Result<Option<String>> {
-    match (positional_code, code_flag) {
-        (Some(_), Some(_)) => Err(Error::Usage(
-            "provide the tunnel code either positionally or with --code, not both".into(),
-        )),
-        (Some(code), None) | (None, Some(code)) => Ok(Some(code)),
-        (None, None) => Ok(None),
     }
 }
