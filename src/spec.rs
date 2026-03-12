@@ -28,22 +28,93 @@ fn parse_port(value: &str) -> Result<u16> {
     Ok(port)
 }
 
+fn is_candidate_port(value: &str) -> bool {
+    value.parse::<u16>().map(|port| port > 0).unwrap_or(false)
+}
+
+fn canonical_host_token(value: &str) -> &str {
+    match value {
+        "localhost" => "127.0.0.1",
+        other => other,
+    }
+}
+
+fn ssh_service_name(
+    bind_interface: Option<&str>,
+    listen_port: u16,
+    connect_host: &str,
+    connect_port: u16,
+) -> String {
+    format!(
+        "ssh:{}:{}:{}:{}",
+        canonical_host_token(bind_interface.unwrap_or("127.0.0.1")),
+        listen_port,
+        canonical_host_token(connect_host),
+        connect_port
+    )
+}
+
 impl LocalSpec {
+    fn looks_like_ssh(parts: &[&str]) -> bool {
+        matches!(parts, [listen_port, _, _] if is_candidate_port(listen_port))
+            || matches!(parts, [_, listen_port, _, _] if is_candidate_port(listen_port))
+    }
+
+    fn parse_ssh(parts: &[&str]) -> Result<Self> {
+        match parts {
+            [listen_port, connect_host, connect_port] => {
+                let listen_port = parse_port(listen_port)?;
+                let connect_port = parse_port(connect_port)?;
+                Ok(Self {
+                    name: ssh_service_name(None, listen_port, connect_host, connect_port),
+                    local_listen_port: Some(listen_port),
+                    remote_connect_port: Some(connect_port),
+                    bind_interface: None,
+                })
+            },
+            [bind_interface, listen_port, connect_host, connect_port] => {
+                let listen_port = parse_port(listen_port)?;
+                let connect_port = parse_port(connect_port)?;
+                Ok(Self {
+                    name: ssh_service_name(
+                        Some(bind_interface),
+                        listen_port,
+                        connect_host,
+                        connect_port,
+                    ),
+                    local_listen_port: Some(listen_port),
+                    remote_connect_port: Some(connect_port),
+                    bind_interface: Some((*bind_interface).to_string()),
+                })
+            },
+            _ => Err(Error::Usage(
+                "ssh-style local specs must be [bind_address:]port:host:hostport".into(),
+            )),
+        }
+    }
+
     pub fn parse(input: &str) -> Result<Self> {
         if input.contains('[') || input.contains(']') {
             return Err(Error::Usage("IPv6 specifiers are not supported yet".into()));
         }
 
-        let mut parts = input.split(':');
+        let parts: Vec<_> = input.split(':').collect();
+        if parts.len() > 4 {
+            return Err(Error::Usage(format!(
+                "too many colon-separated segments in local spec: {input}"
+            )));
+        }
+        if !input.contains('=') && Self::looks_like_ssh(&parts) {
+            return Self::parse_ssh(&parts);
+        }
+
+        let mut parts = parts.into_iter();
         let name = parts
             .next()
             .filter(|part| !part.is_empty())
             .ok_or_else(|| Error::Usage("local spec must include a service name".into()))?
             .to_string();
         let rest: Vec<_> = parts.collect();
-        if rest.len() > 3 {
-            return Err(Error::Usage(format!("too many colon-separated segments in local spec: {input}")));
-        }
 
         match rest.len() {
             0 => Ok(Self {
@@ -90,21 +161,66 @@ impl LocalSpec {
 }
 
 impl RemoteSpec {
+    fn looks_like_ssh(parts: &[&str]) -> bool {
+        matches!(parts, [listen_port, _, _] if is_candidate_port(listen_port))
+            || matches!(parts, [_, listen_port, _, _] if is_candidate_port(listen_port))
+    }
+
+    fn parse_ssh(parts: &[&str]) -> Result<Self> {
+        match parts {
+            [listen_port, connect_host, connect_port] => {
+                let listen_port = parse_port(listen_port)?;
+                let connect_port = parse_port(connect_port)?;
+                Ok(Self {
+                    name: ssh_service_name(None, listen_port, connect_host, connect_port),
+                    local_connect_port: Some(connect_port),
+                    remote_listen_port: Some(listen_port),
+                    connect_address: Some((*connect_host).to_string()),
+                })
+            },
+            [bind_interface, listen_port, connect_host, connect_port] => {
+                let listen_port = parse_port(listen_port)?;
+                let connect_port = parse_port(connect_port)?;
+                Ok(Self {
+                    name: ssh_service_name(
+                        Some(bind_interface),
+                        listen_port,
+                        connect_host,
+                        connect_port,
+                    ),
+                    local_connect_port: Some(connect_port),
+                    remote_listen_port: Some(listen_port),
+                    connect_address: Some((*connect_host).to_string()),
+                })
+            },
+            _ => Err(Error::Usage(
+                "ssh-style remote specs must be [bind_address:]port:host:hostport".into(),
+            )),
+        }
+    }
+
     pub fn parse(input: &str) -> Result<Self> {
         if input.contains('[') || input.contains(']') {
             return Err(Error::Usage("IPv6 specifiers are not supported yet".into()));
         }
 
-        let mut parts = input.split(':');
+        let parts: Vec<_> = input.split(':').collect();
+        if parts.len() > 4 {
+            return Err(Error::Usage(format!(
+                "too many colon-separated segments in remote spec: {input}"
+            )));
+        }
+        if !input.contains('=') && Self::looks_like_ssh(&parts) {
+            return Self::parse_ssh(&parts);
+        }
+
+        let mut parts = parts.into_iter();
         let name = parts
             .next()
             .filter(|part| !part.is_empty())
             .ok_or_else(|| Error::Usage("remote spec must include a service name".into()))?
             .to_string();
         let rest: Vec<_> = parts.collect();
-        if rest.len() > 3 {
-            return Err(Error::Usage(format!("too many colon-separated segments in remote spec: {input}")));
-        }
 
         match rest.len() {
             0 => Ok(Self {
