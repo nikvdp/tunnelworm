@@ -371,11 +371,12 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
 
     loop {
         let result: Result<()> = async {
+            let reconnect_role = reconnect_role(&state);
             let prepared = session::prepare_session(SessionOptions {
                 mailbox: state.config.mailbox.clone(),
                 code_length: 2,
                 code: Some(state.config.code.clone()),
-                allocate_on_connect: matches!(state.config.role, PersistentRole::Allocate),
+                allocate_on_connect: matches!(reconnect_role, PersistentRole::Allocate),
             })
             .await?;
 
@@ -431,6 +432,19 @@ fn is_hard_persistent_failure(error: &Error) -> bool {
         error,
         Error::Authentication(_) | Error::PersistentState(_) | Error::Usage(_)
     )
+}
+
+fn reconnect_role(state: &crate::persistent::PersistentState) -> PersistentRole {
+    match state.peer_public_key_hex.as_deref() {
+        Some(peer_public_key_hex) => {
+            if state.local_identity.public_key_hex.as_str() <= peer_public_key_hex {
+                PersistentRole::Allocate
+            } else {
+                PersistentRole::Join
+            }
+        },
+        None => state.config.role,
+    }
 }
 
 fn next_retry_delay(error: &Error, retry_delay: u64) -> u64 {
