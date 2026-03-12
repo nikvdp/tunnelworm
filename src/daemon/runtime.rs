@@ -8,6 +8,7 @@ use crate::{
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
+    persistent::load_state,
     session::{self, SessionOptions},
 };
 
@@ -351,5 +352,76 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
 }
 
 pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
-    Err(Error::NotImplemented("persistent fowld runtime"))
+    let mut state = load_state(&_state_path)?;
+    if state.peer_public_key_hex.is_none() {
+        return Err(Error::PersistentState(
+            "persistent state is missing the trusted peer identity".into(),
+        ));
+    }
+
+    let intent = forward::CliIntent {
+        locals: state.config.locals.clone(),
+        remotes: state.config.remotes.clone(),
+    };
+    let mut retry_delay = 1u64;
+
+    loop {
+        let result: Result<()> = async {
+            let prepared = session::prepare_session(SessionOptions {
+                mailbox: state.config.mailbox.clone(),
+                code_length: 2,
+                code: Some(state.config.code.clone()),
+            })
+            .await?;
+
+            if let Some(welcome) = &prepared.welcome {
+                eprintln!("Mailbox welcome: {welcome}");
+            }
+
+            let mut connected = prepared.connect().await?;
+            eprintln!("Peer connected.");
+            eprintln!("Verifier: {}", connected.verifier);
+            session::authenticate_persistent_peer(&mut connected, &mut state).await?;
+
+            let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, &intent).await?;
+            let plan = forward::build_cli_plan(&intent, &peer_intent)?;
+            let (_cancel_tx, cancel_rx) = async_channel::bounded(1);
+            forward::run_forwarding(connected, plan, cancel_rx, |event| match event {
+                ForwardEvent::Listening {
+                    name,
+                    listen_host,
+                    listen_port,
+                    connect_host,
+                    connect_port,
+                } => {
+                    eprintln!(
+                        "Listening for {name} on {listen_host}:{listen_port}; forwarding to {connect_host}:{connect_port} on the peer."
+                    );
+                },
+            })
+            .await
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                retry_delay = 1;
+                eprintln!("Persistent session ended. Reconnecting.");
+            },
+            Err(error) if is_hard_persistent_failure(&error) => return Err(error),
+            Err(error) => {
+                eprintln!("Persistent session failed: {error}. Retrying in {retry_delay}s.");
+                task::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                retry_delay = (retry_delay * 2).min(10);
+                continue;
+            },
+        }
+    }
+}
+
+fn is_hard_persistent_failure(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Authentication(_) | Error::PersistentState(_) | Error::Usage(_)
+    )
 }
