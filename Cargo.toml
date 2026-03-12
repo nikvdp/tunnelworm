@@ -1,0 +1,30 @@
+[package]
+name = "fowl-rs"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "fowl_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fowl"
+path = "src/bin/fowl.rs"
+
+[[bin]]
+name = "fowld"
+path = "src/bin/fowld.rs"
+
+[dependencies]
+async-channel = "2.5"
+async-std = { version = "1.13", features = ["attributes"] }
+clap = { version = "4.5", features = ["derive"] }
+futures = "0.3"
+hex = "0.4"
+magic-wormhole = { path = "/tmp/magic-wormhole-rs", features = ["forwarding", "native-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+url = "2"

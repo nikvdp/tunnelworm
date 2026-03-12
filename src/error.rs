@@ -1,0 +1,13 @@
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("not implemented yet: {0}")]
+    NotImplemented(&'static str),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
