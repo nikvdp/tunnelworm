@@ -43,6 +43,7 @@ pub struct FowlConfig {
     pub remotes: Vec<RemoteSpec>,
     pub persistent: bool,
     pub state: Option<PathBuf>,
+    pub overwrite: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +131,8 @@ pub struct TunnelUpArgs {
     pub common: CommonSessionArgs,
     #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
     pub state: Option<PathBuf>,
+    #[arg(long = "overwrite", help = "Replace conflicting local persistent state instead of refusing to start")]
+    pub overwrite: bool,
     #[arg(long = "code", value_name = "CODE", help = "Join an existing persistent tunnel code instead of allocating one")]
     pub code: Option<String>,
 }
@@ -172,6 +175,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
                     args.code,
                     args.state,
                     true,
+                    args.overwrite,
                 )?)),
                 TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
                     code: args.code,
@@ -183,6 +187,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
                 value.top_level.code,
                 value.top_level.state,
                 value.top_level.persistent,
+                false,
             )?)),
         }
     }
@@ -193,6 +198,7 @@ fn build_config(
     code: Option<String>,
     state: Option<PathBuf>,
     persistent: bool,
+    overwrite: bool,
 ) -> Result<FowlConfig> {
     let (locals, remotes) = parse_forward_args(common.forwards)?;
 
@@ -208,6 +214,7 @@ fn build_config(
         remotes,
         persistent,
         state,
+        overwrite,
     })
 }
 

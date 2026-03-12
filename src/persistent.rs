@@ -76,6 +76,12 @@ impl PersistentState {
                 "state file mailbox does not match the requested mailbox".into(),
             ));
         }
+        if self.config.role != expected.role {
+            return Err(Error::PersistentState(format!(
+                "state file role is {:?}, not {:?}",
+                self.config.role, expected.role
+            )));
+        }
         if self.config.locals != expected.locals || self.config.remotes != expected.remotes {
             return Err(Error::PersistentState(
                 "state file forwarding rules do not match the requested command".into(),
@@ -125,13 +131,15 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         println!("Waiting for the persistent peer to connect.");
 
         if state_path.exists() {
-            let state = load_matching_state(&state_path, &expected)?;
-            if state.peer_public_key_hex.is_none() {
-                return Err(Error::PersistentState(
-                    "existing persistent state is missing the trusted peer identity".into(),
-                ));
+            if config.overwrite {
+                println!(
+                    "Overwriting existing persistent state at {}.",
+                    state_path.display()
+                );
+            } else {
+                load_matching_join_state(&state_path, &expected)?;
+                return exec_persistent_daemon(&state_path);
             }
-            return exec_persistent_daemon(&state_path);
         }
 
         let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
@@ -142,12 +150,31 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         return exec_persistent_daemon(&state_path);
     }
 
-    if let Some((state_path, state)) =
-        find_existing_creator_state(config.state.as_deref(), &cwd, config)?
-    {
-        println!("Reusing persistent wormhole code: {}", state.config.code);
-        println!("Persistent state file: {}", state_path.display());
-        return exec_persistent_daemon(&state_path);
+    if let Some(path) = config.state.as_deref() {
+        if path.exists() {
+            let state = load_state(path)?;
+            if matches_creator_config(&state, config) && !config.overwrite {
+                println!("Reusing persistent wormhole code: {}", state.config.code);
+                println!("Persistent state file: {}", path.display());
+                return exec_persistent_daemon(path);
+            }
+            if !matches_creator_config(&state, config) && !config.overwrite {
+                return Err(conflicting_state_error(
+                    path,
+                    "explicit persistent state does not match this creator command",
+                ));
+            }
+            println!("Overwriting existing persistent state at {}.", path.display());
+            fs::remove_file(path)?;
+        }
+    } else if let Some((state_path, state)) = find_existing_creator_state(&cwd, config)? {
+        if !config.overwrite {
+            println!("Reusing persistent wormhole code: {}", state.config.code);
+            println!("Persistent state file: {}", state_path.display());
+            return exec_persistent_daemon(&state_path);
+        }
+        println!("Overwriting existing persistent state at {}.", state_path.display());
+        fs::remove_file(&state_path)?;
     }
 
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
@@ -163,25 +190,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     exec_persistent_daemon(&state_path)
 }
 
-fn find_existing_creator_state(
-    explicit: Option<&Path>,
-    cwd: &Path,
-    config: &FowlConfig,
-) -> Result<Option<(PathBuf, PersistentState)>> {
-    if let Some(path) = explicit {
-        if !path.exists() {
-            return Ok(None);
-        }
-        let state = load_state(path)?;
-        if !matches_creator_config(&state, config) {
-            return Err(Error::PersistentState(format!(
-                "explicit state file {:?} does not match this persistent creator command",
-                path
-            )));
-        }
-        return Ok(Some((path.to_path_buf(), state)));
-    }
-
+fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option<(PathBuf, PersistentState)>> {
     let mut matches = Vec::new();
     for dir in [project_state_dir(cwd), user_state_dir()?] {
         if !dir.exists() {
@@ -204,7 +213,7 @@ fn find_existing_creator_state(
         0 => Ok(None),
         1 => Ok(matches.into_iter().next()),
         _ => Err(Error::PersistentState(
-            "multiple persistent creator states match this command; use --state to pick one"
+            "multiple persistent creator states match this command; use --state to pick one or --overwrite with --state to replace a specific file"
                 .into(),
         )),
     }
@@ -248,6 +257,20 @@ pub fn resolve_state_path(
 pub fn load_matching_state(path: &Path, expected: &PersistentConfig) -> Result<PersistentState> {
     let state = load_state(path)?;
     state.ensure_matches(expected)?;
+    Ok(state)
+}
+
+fn load_matching_join_state(path: &Path, expected: &PersistentConfig) -> Result<PersistentState> {
+    let state = load_matching_state(path, expected).map_err(|error| match error {
+        Error::PersistentState(message) => conflicting_state_error(path, &message),
+        other => other,
+    })?;
+    if state.peer_public_key_hex.is_none() {
+        return Err(conflicting_state_error(
+            path,
+            "existing persistent state is missing the trusted peer identity",
+        ));
+    }
     Ok(state)
 }
 
@@ -341,6 +364,13 @@ fn write_with_restrictive_permissions(path: &Path, bytes: Vec<u8>) -> Result<()>
     file.write_all(&bytes)?;
     file.write_all(b"\n")?;
     Ok(())
+}
+
+fn conflicting_state_error(path: &Path, detail: &str) -> Error {
+    Error::PersistentState(format!(
+        "{detail} at {}. Rerun with --overwrite to replace this local state, or use --state to select a different file.",
+        path.display()
+    ))
 }
 
 fn exec_persistent_daemon(state_path: &Path) -> Result<()> {
