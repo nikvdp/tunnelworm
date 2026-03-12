@@ -31,6 +31,12 @@ Examples:
   Persistent tunnel, join side reuses that code:
     fowl tunnel up --listen 127.0.0.1:9000 --code 7-cobalt-signal
 
+  Inspect the stored state for one local participant:
+    fowl tunnel status --state ./.fowl/7-cobalt-signal--abcd1234.json
+
+  Inspect a tunnel by code when only one local state matches:
+    fowl tunnel status --code 7-cobalt-signal
+
   SSH-style compatibility syntax still works for one-off flows:
     fowl -R 9000:localhost:22
     fowl -L 9000:localhost:22 7-cobalt-signal
@@ -128,6 +134,7 @@ pub struct TopLevelArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+#[command(about = "Persistent tunnel lifecycle commands")]
 pub struct TunnelArgs {
     #[command(subcommand)]
     pub command: TunnelCommand,
@@ -135,11 +142,14 @@ pub struct TunnelArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TunnelCommand {
+    #[command(about = "Create or resume a persistent tunnel sidecar")]
     Up(TunnelUpArgs),
+    #[command(about = "Inspect persistent tunnel state without starting the tunnel")]
     Status(TunnelStatusArgs),
 }
 
 #[derive(Debug, Clone, Args)]
+#[command(about = "Create or resume one side of a persistent tunnel")]
 pub struct TunnelUpArgs {
     #[command(flatten)]
     pub common: CommonSessionArgs,
@@ -152,6 +162,7 @@ pub struct TunnelUpArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+#[command(about = "Inspect the stored state for one local tunnel participant")]
 pub struct TunnelStatusArgs {
     #[arg(long = "code", value_name = "CODE", required_unless_present = "state", help = "Inspect the persistent tunnel state associated with this code")]
     pub code: Option<String>,
