@@ -196,7 +196,6 @@ impl TryFrom<FowlCli> for FowlInvocation {
                     args.common,
                     args.code,
                     args.state,
-                    true,
                     args.overwrite,
                 )?)),
                 TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
