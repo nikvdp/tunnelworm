@@ -21,10 +21,16 @@ async-std = { version = "1.13", features = ["attributes"] }
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3"
 hex = "0.4"
-magic-wormhole = { path = "/tmp/magic-wormhole-rs", features = ["forwarding", "native-tls"] }
+magic-wormhole = { git = "https://github.com/magic-wormhole/magic-wormhole.rs", rev = "72149d844ceee1d6a0c65e107d5339441a44c4d9", default-features = false, features = ["forwarding", "tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 url = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
