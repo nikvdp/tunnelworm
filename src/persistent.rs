@@ -118,7 +118,7 @@ impl PersistentConfig {
 pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     let expected = config.persistent_config()?;
     let cwd = env::current_dir()?;
-    let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected.code)?;
+    let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
 
     if state_path.exists() {
         let state = load_matching_state(&state_path, &expected)?;
@@ -141,18 +141,19 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
 pub fn resolve_state_path(
     explicit: Option<&Path>,
     cwd: &Path,
-    code: &str,
+    config: &PersistentConfig,
 ) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path.to_path_buf());
     }
 
-    let project_path = project_state_dir(cwd).join(state_file_name(code));
+    let file_name = state_file_name(config)?;
+    let project_path = project_state_dir(cwd).join(&file_name);
     if project_path.exists() {
         return Ok(project_path);
     }
 
-    let user_path = user_state_dir()?.join(state_file_name(code));
+    let user_path = user_state_dir()?.join(file_name);
     if user_path.exists() {
         return Ok(user_path);
     }
@@ -183,8 +184,9 @@ pub fn save_state(path: &Path, state: &PersistentState) -> Result<()> {
     write_with_restrictive_permissions(path, serde_json::to_vec_pretty(state)?)
 }
 
-pub fn state_file_name(code: &str) -> String {
-    let slug = code
+pub fn state_file_name(config: &PersistentConfig) -> Result<String> {
+    let slug = config
+        .code
         .chars()
         .map(|ch| match ch {
             'a'..='z' | 'A'..='Z' | '0'..='9' => ch.to_ascii_lowercase(),
@@ -195,7 +197,9 @@ pub fn state_file_name(code: &str) -> String {
         .trim_matches('-')
         .to_string();
     let slug = if slug.is_empty() { "code".into() } else { slug };
-    format!("{slug}--{:016x}.json", fnv1a64(code.as_bytes()))
+    let fingerprint = serde_json::to_vec(config)
+        .map_err(|error| Error::PersistentState(format!("could not fingerprint state config: {error}")))?;
+    Ok(format!("{slug}--{:016x}.json", fnv1a64(&fingerprint)))
 }
 
 pub fn project_state_dir(cwd: &Path) -> PathBuf {
