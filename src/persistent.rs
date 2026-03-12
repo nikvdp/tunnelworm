@@ -112,8 +112,8 @@ impl PersistentConfig {
 
     pub fn role_from_fowl_config(config: &FowlConfig) -> Result<PersistentRole> {
         match (config.locals.is_empty(), config.remotes.is_empty()) {
-            (false, true) => PersistentRole::Join,
-            (true, false) => PersistentRole::Allocate,
+            (false, true) => Ok(PersistentRole::Join),
+            (true, false) => Ok(PersistentRole::Allocate),
             _ => {
                 return Err(Error::Usage(
                     "persistent mode currently requires exactly one of --local/-L or --remote/-R".into(),
