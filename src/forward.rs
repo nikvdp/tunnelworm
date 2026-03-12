@@ -3,7 +3,7 @@ use std::{
     net::IpAddr,
 };
 
-use futures::future;
+use async_channel::Receiver;
 use magic_wormhole::{Wormhole, forwarding};
 use serde::{Deserialize, Serialize};
 
@@ -231,7 +231,12 @@ fn target_host(host: &str) -> Result<Option<url::Host>> {
     ))
 }
 
-pub async fn run_forwarding<F>(session: ConnectedSession, plan: ForwardPlan, mut on_event: F) -> Result<()>
+pub async fn run_forwarding<F>(
+    session: ConnectedSession,
+    plan: ForwardPlan,
+    cancel: Receiver<()>,
+    mut on_event: F,
+) -> Result<()>
 where
     F: FnMut(ForwardEvent),
 {
@@ -246,7 +251,9 @@ where
             |_| {},
             session.relay_hints,
             targets,
-            future::pending(),
+            async move {
+                let _ = cancel.recv().await;
+            },
         )
         .await?;
         return Ok(());
@@ -285,6 +292,10 @@ where
         });
     }
 
-    offer.accept(future::pending()).await?;
+    offer
+        .accept(async move {
+            let _ = cancel.recv().await;
+        })
+        .await?;
     Ok(())
 }

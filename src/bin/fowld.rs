@@ -1,8 +1,11 @@
 use clap::Parser;
 
+use fowl_rs::daemon::runtime::DaemonConfig;
+
 #[derive(Debug, Parser)]
 #[command(name = "fowld")]
 #[command(about = "Forward Over Wormhole, Locally, Daemon")]
+#[command(version)]
 struct Args {
     #[arg(long = "mailbox")]
     mailbox: Option<String>,
@@ -12,8 +15,12 @@ struct Args {
 
 #[async_std::main]
 async fn main() {
-    let _ = Args::parse();
-    if let Err(error) = fowl_rs::session::run_fowld().await {
+    let args = Args::parse();
+    let config = DaemonConfig {
+        mailbox: args.mailbox,
+        code_length: args.code_length,
+    };
+    if let Err(error) = fowl_rs::daemon::runtime::run(config).await {
         eprintln!("{error}");
         std::process::exit(1);
     }
