@@ -107,11 +107,12 @@ fn signature_from_hex(input: &str) -> Result<Signature> {
 fn decode_fixed_hex<const N: usize>(input: &str, label: &str) -> Result<[u8; N]> {
     let bytes = hex::decode(input)
         .map_err(|error| Error::Authentication(format!("invalid {label} hex: {error}")))?;
+    let actual_len = bytes.len();
     bytes.try_into().map_err(|_| {
         Error::Authentication(format!(
             "{label} must be exactly {} bytes, got {}",
             N,
-            bytes.len()
+            actual_len
         ))
     })
 }
