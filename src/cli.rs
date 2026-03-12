@@ -17,6 +17,7 @@ pub struct FowlConfig {
 #[derive(Debug, Parser)]
 #[command(name = "fowl")]
 #[command(about = "Forward Over Wormhole, Locally")]
+#[command(version)]
 pub struct FowlCli {
     #[arg(long = "mailbox")]
     pub mailbox: Option<String>,

@@ -117,15 +117,16 @@ impl PreparedSession {
 
 pub async fn run_fowl(config: FowlConfig) -> Result<()> {
     let prepared = prepare_session(SessionOptions::from(&config)).await?;
-    if let Some(welcome) = &prepared.welcome {
-        println!("welcome: {welcome}");
-    }
     if prepared.code_was_allocated {
-        println!("code: {}", prepared.code);
+        println!("Wormhole code: {}", prepared.code);
+    }
+    if let Some(welcome) = &prepared.welcome {
+        println!("Mailbox welcome: {welcome}");
     }
     let mut session = prepared.connect().await?;
-    println!("peer-connected: {}", session.verifier);
-    println!("peer-versions: {}", session.peer_version);
+    println!("Peer connected.");
+    println!("Verifier: {}", session.verifier);
+    println!("Peer versions: {}", session.peer_version);
 
     let intent = CliIntent::from(&config);
     let peer_intent = forward::exchange_cli_intents(&mut session.wormhole, &intent).await?;
@@ -139,7 +140,7 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
             connect_port,
         } => {
             println!(
-                "listening: service={name} listen={listen_host}:{listen_port} connect={connect_host}:{connect_port}"
+                "Listening for {name} on {listen_host}:{listen_port}; forwarding to {connect_host}:{connect_port} on the peer."
             );
         },
     })
