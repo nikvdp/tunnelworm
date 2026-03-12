@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::{
+    cli::stderr_style,
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
@@ -361,6 +362,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
         ));
     }
 
+    let style = stderr_style();
     let intent = forward::CliIntent {
         locals: state.config.locals.clone(),
         remotes: state.config.remotes.clone(),
@@ -373,17 +375,17 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 mailbox: state.config.mailbox.clone(),
                 code_length: 2,
                 code: Some(state.config.code.clone()),
-                allocate_on_connect: matches!(state.config.role, crate::persistent::PersistentRole::Allocate),
+                allocate_on_connect: true,
             })
             .await?;
 
             if let Some(welcome) = &prepared.welcome {
-                eprintln!("Mailbox welcome: {welcome}");
+                eprintln!("{} {welcome}", style.label("Mailbox:"));
             }
 
             let mut connected = prepared.connect().await?;
-            eprintln!("Peer connected.");
-            eprintln!("Verifier: {}", connected.verifier);
+            eprintln!("{} peer connected", style.status("Status:"));
+            eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
             session::authenticate_persistent_peer(&mut connected, &mut state).await?;
 
             let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, &intent).await?;
@@ -398,7 +400,8 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                     connect_port,
                 } => {
                     eprintln!(
-                        "Listening for {name} on {listen_host}:{listen_port}; forwarding to {connect_host}:{connect_port} on the peer."
+                        "{} {name} on {listen_host}:{listen_port} -> {connect_host}:{connect_port}",
+                        style.status("Listening:"),
                     );
                 },
             })
@@ -409,13 +412,14 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
         match result {
             Ok(()) => {
                 retry_delay = 1;
-                eprintln!("Persistent session ended. Reconnecting.");
+                eprintln!("{} session ended; reconnecting...", style.status("Status:"));
             },
             Err(error) if is_hard_persistent_failure(&error) => return Err(error),
             Err(error) => {
-                eprintln!("Persistent session failed: {error}. Retrying in {retry_delay}s.");
+                let retry_hint = persistent_retry_message(&state.config.code, &error, retry_delay);
+                eprintln!("{} {retry_hint}", style.status("Status:"));
                 task::sleep(std::time::Duration::from_secs(retry_delay)).await;
-                retry_delay = (retry_delay * 2).min(10);
+                retry_delay = next_retry_delay(&error, retry_delay);
                 continue;
             },
         }
@@ -427,4 +431,35 @@ fn is_hard_persistent_failure(error: &Error) -> bool {
         error,
         Error::Authentication(_) | Error::PersistentState(_) | Error::Usage(_)
     )
+}
+
+fn next_retry_delay(error: &Error, retry_delay: u64) -> u64 {
+    if is_expected_rendezvous_gap(error) {
+        1
+    } else {
+        (retry_delay * 2).min(5)
+    }
+}
+
+fn persistent_retry_message(code: &str, error: &Error, retry_delay: u64) -> String {
+    if is_expected_rendezvous_gap(error) {
+        return format!(
+            "waiting for the peer to claim code {code}; retrying in {retry_delay}s..."
+        );
+    }
+    if is_transit_disconnect(error) {
+        return format!("the previous tunnel session ended; retrying in {retry_delay}s...");
+    }
+    format!("{error}. Retrying in {retry_delay}s.")
+}
+
+fn is_expected_rendezvous_gap(error: &Error) -> bool {
+    matches!(error, Error::Session(message) if message.contains("UnclaimedNameplate"))
+}
+
+fn is_transit_disconnect(error: &Error) -> bool {
+    match error {
+        Error::Wormhole(wormhole) => wormhole.to_string().contains("Transit error"),
+        other => other.to_string().contains("Transit error"),
+    }
 }
