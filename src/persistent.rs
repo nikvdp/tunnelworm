@@ -128,6 +128,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
         println!("Joining persistent tunnel with code: {}", expected.code);
         println!("Persistent state file: {}", state_path.display());
+        println!("{}", config.peer_requirement_line());
         println!("Waiting for the persistent peer to connect.");
 
         if state_path.exists() {
@@ -156,6 +157,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
             if matches_creator_config(&state, config) && !config.overwrite {
                 println!("Reusing persistent wormhole code: {}", state.config.code);
                 println!("Persistent state file: {}", path.display());
+                println!("{}", config.peer_requirement_line());
                 return exec_persistent_daemon(path);
             }
             if !matches_creator_config(&state, config) && !config.overwrite {
@@ -171,6 +173,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         if !config.overwrite {
             println!("Reusing persistent wormhole code: {}", state.config.code);
             println!("Persistent state file: {}", state_path.display());
+            println!("{}", config.peer_requirement_line());
             return exec_persistent_daemon(&state_path);
         }
         println!("Overwriting existing persistent state at {}.", state_path.display());
@@ -180,6 +183,7 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
     println!("Persistent wormhole code: {}", prepared.code);
     println!("Reuse this code on the peer and on future persistent restarts.");
+    println!("{}", config.peer_requirement_line());
     let expected = PersistentConfig::from_fowl_allocate_config(config, prepared.code.clone());
     let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
     let mut state = PersistentState::new(expected, persistent_auth::generate_identity());

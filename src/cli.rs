@@ -13,8 +13,9 @@ Create a TCP port forward between two terminals over a magic-wormhole session.
 Top-level `fowl ...` is the one-off path.
 `fowl tunnel up ...` is the persistent tunnel path.
 
-One side provides `--listen` and the peer provides `--connect`. SSH-style
-`-L` and `-R` remain supported as compatibility syntax.";
+One side provides `--listen` and the peer provides `--connect`.
+If you use SSH-style compatibility syntax instead, `-L` still needs a
+corresponding `-R` on the peer and `-R` still needs a corresponding `-L`.";
 
 const FOWL_AFTER_HELP: &str = "\
 Examples:
@@ -32,7 +33,13 @@ Examples:
 
   SSH-style compatibility syntax still works for one-off flows:
     fowl -R 9000:localhost:22
-    fowl -L 9000:localhost:22 7-cobalt-signal";
+    fowl -L 9000:localhost:22 7-cobalt-signal
+
+Notes:
+  - `--listen` always needs a complementary `--connect` on the peer.
+  - `--connect` always needs a complementary `--listen` on the peer.
+  - `-L` always needs a corresponding `-R` on the peer.
+  - `-R` always needs a corresponding `-L` on the peer.";
 
 #[derive(Debug, Clone)]
 pub struct FowlConfig {
@@ -57,6 +64,13 @@ pub enum FowlInvocation {
     Run(FowlConfig),
     TunnelUp(FowlConfig),
     TunnelStatus(TunnelStatusConfig),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForwardHalf {
+    Listen,
+    Connect,
+    Mixed,
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -250,5 +264,27 @@ fn parse_forward_args(forwards: ForwardArgs) -> Result<(Vec<LocalSpec>, Vec<Remo
 impl FowlConfig {
     pub fn persistent_config(&self) -> Result<PersistentConfig> {
         PersistentConfig::from_fowl_config(self)
+    }
+
+    pub fn local_half(&self) -> ForwardHalf {
+        match (!self.locals.is_empty(), !self.remotes.is_empty()) {
+            (true, false) => ForwardHalf::Listen,
+            (false, true) => ForwardHalf::Connect,
+            _ => ForwardHalf::Mixed,
+        }
+    }
+
+    pub fn peer_requirement_line(&self) -> &'static str {
+        match self.local_half() {
+            ForwardHalf::Listen => {
+                "Peer must provide the complementary --connect side for this tunnel. In SSH-style compatibility syntax, that is the peer's -R side."
+            },
+            ForwardHalf::Connect => {
+                "Peer must provide the complementary --listen side for this tunnel. In SSH-style compatibility syntax, that is the peer's -L side."
+            },
+            ForwardHalf::Mixed => {
+                "Peer must provide the complementary half of each forward on the other side of the tunnel."
+            },
+        }
     }
 }
