@@ -120,6 +120,9 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
     if let Some(code) = &config.code {
         let expected = PersistentConfig::from_fowl_join_config(config, code.clone());
         let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
+        println!("Joining persistent tunnel with code: {}", expected.code);
+        println!("Persistent state file: {}", state_path.display());
+        println!("Waiting for the persistent peer to connect.");
 
         if state_path.exists() {
             let state = load_matching_state(&state_path, &expected)?;
@@ -128,7 +131,6 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
                     "existing persistent state is missing the trusted peer identity".into(),
                 ));
             }
-            println!("Persistent state file: {}", state_path.display());
             return exec_persistent_daemon(&state_path);
         }
 
@@ -137,7 +139,6 @@ pub async fn initialize_or_exec(config: &FowlConfig) -> Result<()> {
         let mut connected = prepared.connect().await?;
         session::authenticate_persistent_peer(&mut connected, &mut state).await?;
         save_state(&state_path, &state)?;
-        println!("Persistent state file: {}", state_path.display());
         return exec_persistent_daemon(&state_path);
     }
 
