@@ -3,6 +3,10 @@ name = "fowl-rs"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["xtask"]
+resolver = "2"
+
 [lib]
 name = "fowl_rs"
 path = "src/lib.rs"
