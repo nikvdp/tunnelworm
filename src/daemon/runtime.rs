@@ -11,6 +11,7 @@ use std::{
 
 use crate::{
     cli::stderr_style,
+    control::ControlServer,
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
@@ -367,6 +368,7 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
 pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     let _lock = acquire_persistent_state_lock(&_state_path)?;
     let runtime_status = PersistentRuntimeStatus::new(&_state_path)?;
+    let _control = ControlServer::spawn(&_state_path)?;
     let mut state = load_state(&_state_path)?;
     if state.peer_public_key_hex.is_none() {
         return Err(Error::PersistentState(

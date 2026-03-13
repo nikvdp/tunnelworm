@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelStatusConfig, TunnelUpConfig},
+    control::{ControlResponse, control_socket_path, probe_runtime},
     error::{Error, Result},
     persistent_auth,
     session::{self, SessionOptions},
@@ -320,14 +321,12 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     );
     println!("  {} {}", style.label("bootstrap:"), bootstrap_role_label(state.config.role));
     println!("  {} {}", style.label("endpoint:"), local_endpoint_label(&state.config));
-    println!(
-        "  {} {}",
-        style.label("state:"),
-        current_tunnel_runtime(&state_path)?.label()
-    );
-    if let Some(detail) = current_tunnel_runtime(&state_path)?.detail() {
+    let runtime = current_tunnel_runtime(&state_path)?;
+    println!("  {} {}", style.label("state:"), runtime.label());
+    if let Some(detail) = runtime.detail() {
         println!("  {} {}", style.label("detail:"), detail);
     }
+    println!("  {} {}", style.label("control:"), control_socket_path(&state_path).display());
     println!(
         "  {} {}",
         style.label("mailbox:"),
@@ -527,6 +526,10 @@ pub fn runtime_status_path(state_path: &Path) -> PathBuf {
 fn current_tunnel_runtime(state_path: &Path) -> Result<ResolvedTunnelRuntime> {
     if !persistent_worker_running(state_path)? {
         return Ok(ResolvedTunnelRuntime::Stopped);
+    }
+
+    if let Some(ControlResponse::Probe { runtime, .. }) = probe_runtime(state_path)? {
+        return Ok(ResolvedTunnelRuntime::Live(runtime));
     }
 
     let runtime_path = runtime_status_path(state_path);

@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod control;
 pub mod daemon;
 pub mod error;
 pub mod forward;
