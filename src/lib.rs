@@ -5,4 +5,5 @@ pub mod forward;
 pub mod persistent;
 pub mod persistent_auth;
 pub mod session;
+pub mod self_update;
 pub mod spec;

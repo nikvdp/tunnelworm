@@ -18,6 +18,7 @@ Top-level `tunnelworm ...` is the one-off path.
 `tunnelworm tunnel create ...` bootstraps a named persistent tunnel.
 `tunnelworm tunnel up ...` starts a saved persistent tunnel by name.
 `tunnelworm tunnel list`, `status`, and `delete` manage saved tunnel endpoints.
+`tunnelworm self-update` refreshes the installed binaries from GitHub releases.
 
 One side provides `--listen` and the peer provides `--connect`.
 If you use SSH-style compatibility syntax instead, `-L` still needs a
@@ -54,6 +55,9 @@ Examples:
 
   Generate a zsh completion script:
     tunnelworm completion zsh
+
+  Update the installed binaries from the latest GitHub release:
+    tunnelworm self-update
 
   SSH-style compatibility syntax still works for one-off flows:
     tunnelworm -R 9000:localhost:22
@@ -119,6 +123,14 @@ Examples:
   Save a bash completion script locally:
     tunnelworm completion bash > ~/.local/share/bash-completion/completions/tunnelworm";
 
+const SELF_UPDATE_AFTER_HELP: &str = "\
+Examples:
+  Download the latest GitHub release and replace this binary:
+    tunnelworm self-update
+
+Notes:
+  If a sibling tunnelwormd binary is installed next to tunnelworm, it is updated too.";
+
 fn help_bold(value: &str) -> String {
     stdout_style().label(value)
 }
@@ -153,12 +165,13 @@ fn styled_top_level_long_about() -> StyledStr {
 
 fn styled_top_level_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
+        "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm self-update\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
         help_header("Examples"),
         help_bold("One-off forward"),
         help_bold("Named persistent tunnel"),
         help_bold("Manage saved endpoints"),
         help_bold("Shell completion"),
+        help_bold("Self-update"),
         help_bold("SSH-style compatibility syntax"),
         help_header("Notes"),
     ))
@@ -226,12 +239,24 @@ fn styled_completion_after_help() -> StyledStr {
     ))
 }
 
+fn styled_self_update_after_help() -> StyledStr {
+    StyledStr::from(format!(
+        "{}:\n  {}:\n    tunnelworm self-update\n\n{}:\n  - This downloads the latest GitHub release for the current platform.\n  - If a sibling `tunnelwormd` is installed next to `tunnelworm`, it is updated too.",
+        help_header("Examples"),
+        help_bold("Download and install the latest release"),
+        help_header("Notes"),
+    ))
+}
+
 pub fn tunnelworm_command() -> Command {
     TunnelwormCli::command()
         .long_about(styled_top_level_long_about())
         .after_long_help(styled_top_level_after_help())
         .mut_subcommand("completion", |sub| {
             sub.after_long_help(styled_completion_after_help())
+        })
+        .mut_subcommand("self-update", |sub| {
+            sub.after_long_help(styled_self_update_after_help())
         })
         .mut_subcommand("tunnel", |sub| {
             sub.after_long_help(styled_tunnel_after_help())
@@ -257,6 +282,9 @@ pub fn tunnelworm_completion_command() -> Command {
         .after_long_help(styled_top_level_after_help())
         .mut_subcommand("completion", |sub| {
             sub.after_long_help(styled_completion_after_help())
+        })
+        .mut_subcommand("self-update", |sub| {
+            sub.after_long_help(styled_self_update_after_help())
         })
         .mut_subcommand("tunnel", |sub| {
             sub.after_long_help(styled_tunnel_after_help())
@@ -315,6 +343,7 @@ pub struct TunnelDeleteConfig {
 pub enum TunnelwormInvocation {
     Run(FowlConfig),
     Completion(Shell),
+    SelfUpdate,
     TunnelCreate(FowlConfig),
     TunnelUp(TunnelUpConfig),
     TunnelList,
@@ -532,6 +561,7 @@ pub struct TunnelwormCompletionCli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum FowlSubcommand {
     Completion(CompletionArgs),
+    SelfUpdate(SelfUpdateArgs),
     Tunnel(TunnelArgs),
 }
 
@@ -543,12 +573,18 @@ pub struct CompletionArgs {
     pub shell: Shell,
 }
 
+#[derive(Debug, Clone, Args)]
+#[command(about = "Download and install the latest GitHub release")]
+#[command(after_long_help = SELF_UPDATE_AFTER_HELP)]
+pub struct SelfUpdateArgs {}
+
 impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
     type Error = Error;
 
     fn try_from(value: TunnelwormCli) -> Result<Self> {
         match value.command {
             Some(FowlSubcommand::Completion(args)) => Ok(Self::Completion(args.shell)),
+            Some(FowlSubcommand::SelfUpdate(_)) => Ok(Self::SelfUpdate),
             Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
                 TunnelCommand::Create(args) => Ok(Self::TunnelCreate(build_config(
                     args.common,

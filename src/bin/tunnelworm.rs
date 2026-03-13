@@ -43,6 +43,7 @@ async fn main() {
                 Ok(())
             }
         },
+        TunnelwormInvocation::SelfUpdate => tunnelworm::self_update::run_self_update(),
         TunnelwormInvocation::TunnelCreate(config) => persistent::create_named_tunnel(&config).await,
         TunnelwormInvocation::TunnelUp(config) => persistent::up_named_tunnel(&config),
         TunnelwormInvocation::TunnelList => persistent::list_named_tunnels(),
