@@ -17,12 +17,22 @@ pub enum PipeMode {
 }
 
 pub fn infer_pipe_mode(explicit: Option<PipeMode>) -> Result<PipeMode> {
+    infer_pipe_mode_from_terminals(
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+        explicit,
+    )
+}
+
+pub fn infer_pipe_mode_from_terminals(
+    stdin_tty: bool,
+    stdout_tty: bool,
+    explicit: Option<PipeMode>,
+) -> Result<PipeMode> {
     if let Some(mode) = explicit {
         return Ok(mode);
     }
 
-    let stdin_tty = std::io::stdin().is_terminal();
-    let stdout_tty = std::io::stdout().is_terminal();
     match (stdin_tty, stdout_tty) {
         (false, true) => Ok(PipeMode::Send),
         (true, false) => Ok(PipeMode::Receive),
