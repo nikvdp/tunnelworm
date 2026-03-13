@@ -1,5 +1,5 @@
 use async_channel::{Receiver, Sender};
-use async_std::{io, prelude::*, task};
+use async_std::{io, net::{TcpListener, TcpStream}, prelude::*, task};
 use fs2::FileExt;
 use futures::{FutureExt, select};
 use serde::{Deserialize, Serialize};
@@ -7,14 +7,16 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use crate::{
     cli::stderr_style,
-    control::ControlServer,
+    control::{ControlResponse, ControlServer, RuntimeControlRequest},
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
+    mux::{ChannelKind, IncomingChannel, MuxSession, MuxTransport},
     persistent::{PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
     session::{self, SessionOptions},
     status_line::StatusLine,
@@ -60,6 +62,12 @@ struct TcpListen {
 struct TcpConnect {
     host: String,
     port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PortForwardOpen {
+    connect_host: String,
+    connect_port: u16,
 }
 
 fn parse_listen_endpoint(input: &str) -> Result<TcpListen> {
@@ -166,6 +174,214 @@ fn build_daemon_plan(here: &[DaemonRule], there: &[DaemonRule]) -> Result<Forwar
     }
 
     Ok(ForwardPlan { listeners, targets })
+}
+
+async fn bridge_tcp_and_channel(stream: TcpStream, channel: crate::mux::MuxChannel) -> Result<()> {
+    let mut reader = stream.clone();
+    let mut writer = stream;
+    let channel_for_send = channel.clone();
+    let send_task = task::spawn(async move {
+        let mut buffer = vec![0u8; 16 * 1024];
+        loop {
+            let read = reader.read(&mut buffer).await?;
+            if read == 0 {
+                channel_for_send.close().await?;
+                return Ok::<(), Error>(());
+            }
+            channel_for_send.send(buffer[..read].to_vec()).await?;
+        }
+    });
+
+    let recv_task = task::spawn(async move {
+        while let Some(payload) = channel.recv().await? {
+            writer.write_all(&payload).await?;
+            writer.flush().await?;
+        }
+        Ok::<(), Error>(())
+    });
+
+    send_task.await?;
+    recv_task.await?;
+    Ok(())
+}
+
+async fn handle_incoming_channel(
+    incoming: IncomingChannel,
+    runtime_status: &PersistentRuntimeStatus,
+    style: &crate::cli::AnsiStyle,
+) -> Result<()> {
+    match incoming.kind {
+        ChannelKind::Echo => {
+            while let Some(payload) = incoming.channel.recv().await? {
+                incoming.channel.send(payload).await?;
+            }
+            incoming.channel.close().await?;
+            Ok(())
+        },
+        ChannelKind::PortForward => {
+            let open: PortForwardOpen = serde_json::from_slice(&incoming.open_payload)?;
+            let stream = TcpStream::connect((open.connect_host.as_str(), open.connect_port))
+                .await
+                .map_err(|error| {
+                    Error::Session(format!(
+                        "could not connect to local target {}:{}: {error}",
+                        open.connect_host, open.connect_port
+                    ))
+                })?;
+            let detail = format!(
+                "peer port forward -> local {}:{}",
+                open.connect_host, open.connect_port
+            );
+            runtime_status.write(TunnelRuntimeStatus {
+                phase: TunnelRuntimePhase::Up,
+                detail: Some(detail.clone()),
+            })?;
+            eprintln!("{} {detail}", style.status("Forwarding:"));
+            bridge_tcp_and_channel(stream, incoming.channel).await
+        },
+        ChannelKind::Pipe | ChannelKind::Shell => Err(Error::NotImplemented(
+            "incoming pipe or shell channels are not wired yet",
+        )),
+    }
+}
+
+async fn drive_incoming_channels(
+    session: MuxSession,
+    runtime_status: PersistentRuntimeStatus,
+    style: crate::cli::AnsiStyle,
+) {
+    while let Ok(incoming) = session.next_incoming().await {
+        let runtime_status = runtime_status.clone();
+        let style = style.clone();
+        task::spawn(async move {
+            let _ = handle_incoming_channel(incoming, &runtime_status, &style).await;
+        });
+    }
+}
+
+async fn drive_listener(
+    listener_plan: ListenerPlan,
+    session: MuxSession,
+    runtime_status: PersistentRuntimeStatus,
+    style: crate::cli::AnsiStyle,
+    cancel: Receiver<()>,
+) -> Result<()> {
+    let listener = TcpListener::bind((listener_plan.listen_host.as_str(), listener_plan.listen_port))
+        .await
+        .map_err(|error| {
+            Error::Session(format!(
+                "could not listen on {}:{}: {error}",
+                listener_plan.listen_host, listener_plan.listen_port
+            ))
+        })?;
+
+    let detail = format!(
+        "local {}:{} -> peer {}:{}",
+        listener_plan.listen_host,
+        listener_plan.listen_port,
+        listener_plan.connect_host,
+        listener_plan.connect_port
+    );
+    runtime_status.write(TunnelRuntimeStatus {
+        phase: TunnelRuntimePhase::Up,
+        detail: Some(detail.clone()),
+    })?;
+    eprintln!("{} {detail}", style.status("Listening:"));
+
+    loop {
+        let accept = listener.accept().fuse();
+        let cancel_fut = cancel.recv().fuse();
+        futures::pin_mut!(accept, cancel_fut);
+        futures::select! {
+            accepted = accept => {
+                let (stream, _) = accepted.map_err(|error| {
+                    Error::Session(format!(
+                        "could not accept a local connection on {}:{}: {error}",
+                        listener_plan.listen_host, listener_plan.listen_port
+                    ))
+                })?;
+                let session = session.clone();
+                let open = PortForwardOpen {
+                    connect_host: listener_plan.connect_host.clone(),
+                    connect_port: listener_plan.connect_port,
+                };
+                task::spawn(async move {
+                    let result: Result<()> = async {
+                        let channel = session
+                            .open_channel(ChannelKind::PortForward, serde_json::to_vec(&open)?)
+                            .await?;
+                        bridge_tcp_and_channel(stream, channel).await
+                    }.await;
+                    let _ = result;
+                });
+            },
+            _ = cancel_fut => return Ok(()),
+        }
+    }
+}
+
+async fn handle_runtime_control_request(
+    request: RuntimeControlRequest,
+    session: Option<MuxSession>,
+    state_path: &Path,
+) -> Result<()> {
+    match request {
+        RuntimeControlRequest::Probe { reply } => {
+            let state = load_state(state_path)?;
+            let runtime_path = runtime_status_path(state_path);
+            let runtime = if runtime_path.exists() {
+                let bytes = fs::read(&runtime_path)?;
+                serde_json::from_slice(&bytes)?
+            } else {
+                TunnelRuntimeStatus {
+                    phase: TunnelRuntimePhase::Starting,
+                    detail: Some("persistent worker is starting".into()),
+                }
+            };
+            let _ = reply
+                .send(Ok(ControlResponse::Probe {
+                    tunnel_name: state.config.name,
+                    code: state.config.code,
+                    runtime,
+                }))
+                .await;
+        },
+        RuntimeControlRequest::Echo { payload, reply } => {
+            let Some(session) = session else {
+                let _ = reply
+                    .send(Err(Error::Session("the tunnel is not connected yet".into())))
+                    .await;
+                return Ok(());
+            };
+            let channel = session.open_channel(ChannelKind::Echo, Vec::new()).await?;
+            channel.send(payload.into_bytes()).await?;
+            channel.close().await?;
+            let mut echoed = Vec::new();
+            while let Some(chunk) = channel.recv().await? {
+                echoed.extend(chunk);
+            }
+            let _ = reply
+                .send(Ok(ControlResponse::Echo {
+                    payload: String::from_utf8_lossy(&echoed).into_owned(),
+                }))
+                .await;
+        },
+    }
+    Ok(())
+}
+
+async fn drive_runtime_control_requests(
+    requests: Receiver<RuntimeControlRequest>,
+    live_session: Arc<Mutex<Option<MuxSession>>>,
+    state_path: PathBuf,
+) {
+    while let Ok(request) = requests.recv().await {
+        let session = live_session
+            .lock()
+            .expect("live session mutex poisoned")
+            .clone();
+        let _ = handle_runtime_control_request(request, session, &state_path).await;
+    }
 }
 
 async fn emit_event(sender: &Sender<OutputEvent>, event: OutputEvent) {
@@ -368,7 +584,14 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
 pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     let _lock = acquire_persistent_state_lock(&_state_path)?;
     let runtime_status = PersistentRuntimeStatus::new(&_state_path)?;
-    let _control = ControlServer::spawn(&_state_path)?;
+    let (control_tx, control_rx) = async_channel::unbounded::<RuntimeControlRequest>();
+    let live_session = Arc::new(Mutex::new(None::<MuxSession>));
+    let _control = ControlServer::spawn(&_state_path, control_tx)?;
+    task::spawn(drive_runtime_control_requests(
+        control_rx,
+        live_session.clone(),
+        _state_path.clone(),
+    ));
     let mut state = load_state(&_state_path)?;
     if state.peer_public_key_hex.is_none() {
         return Err(Error::PersistentState(
@@ -431,27 +654,37 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 })?;
                 eprintln!("{} {detail}", style.status("Forwarding:"));
             }
-            let (_cancel_tx, cancel_rx) = async_channel::bounded(1);
-            let runtime_status_ref = &runtime_status;
-            forward::run_forwarding(connected, plan, cancel_rx, |event| match event {
-                ForwardEvent::Listening {
-                    name: _,
-                    listen_host,
-                    listen_port,
-                    connect_host,
-                    connect_port,
-                } => {
-                    let detail = format!(
-                        "local {listen_host}:{listen_port} -> peer {connect_host}:{connect_port}"
-                    );
-                    let _ = runtime_status_ref.write(TunnelRuntimeStatus {
-                        phase: TunnelRuntimePhase::Up,
-                        detail: Some(detail.clone()),
-                    });
-                    eprintln!("{} {detail}", style.status("Listening:"));
-                },
-            })
-            .await
+            let transport = MuxTransport::connect(connected, reconnect_role).await?;
+            let mux_session = transport.session();
+            {
+                *live_session.lock().expect("live session mutex poisoned") = Some(mux_session.clone());
+            }
+            let incoming_task = task::spawn(drive_incoming_channels(
+                mux_session.clone(),
+                runtime_status.clone(),
+                style.clone(),
+            ));
+
+            let (listener_cancel_tx, listener_cancel_rx) = async_channel::bounded::<()>(1);
+            let mut listener_tasks = Vec::new();
+            for listener in plan.listeners {
+                listener_tasks.push(task::spawn(drive_listener(
+                    listener,
+                    mux_session.clone(),
+                    runtime_status.clone(),
+                    style.clone(),
+                    listener_cancel_rx.clone(),
+                )));
+            }
+
+            let transport_result = transport.wait_for_close().await;
+            let _ = listener_cancel_tx.send(()).await;
+            for task in listener_tasks {
+                let _ = task.await;
+            }
+            let _ = incoming_task.cancel().await;
+            *live_session.lock().expect("live session mutex poisoned") = None;
+            transport_result
         }
         .await;
 
@@ -619,6 +852,7 @@ async fn sleep_with_retry_status(
     Ok(())
 }
 
+#[derive(Clone)]
 struct PersistentRuntimeStatus {
     path: PathBuf,
 }

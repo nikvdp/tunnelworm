@@ -3,6 +3,7 @@ use async_std::{
     os::unix::net::UnixListener,
     task,
 };
+use async_channel::Sender;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -18,6 +19,7 @@ use crate::{
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ControlRequest {
     Probe {},
+    Echo { payload: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,8 +30,22 @@ pub enum ControlResponse {
         code: String,
         runtime: TunnelRuntimeStatus,
     },
+    Echo {
+        payload: String,
+    },
     Error {
         message: String,
+    },
+}
+
+#[derive(Debug)]
+pub enum RuntimeControlRequest {
+    Probe {
+        reply: Sender<Result<ControlResponse>>,
+    },
+    Echo {
+        payload: String,
+        reply: Sender<Result<ControlResponse>>,
     },
 }
 
@@ -38,7 +54,7 @@ pub struct ControlServer {
 }
 
 impl ControlServer {
-    pub fn spawn(state_path: &Path) -> Result<Self> {
+    pub fn spawn(state_path: &Path, requests: Sender<RuntimeControlRequest>) -> Result<Self> {
         let socket_path = control_socket_path(state_path);
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent)?;
@@ -52,8 +68,9 @@ impl ControlServer {
         task::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let state_path = state_path.clone();
+                let requests = requests.clone();
                 task::spawn(async move {
-                    let _ = handle_stream(stream, &state_path).await;
+                    let _ = handle_stream(stream, &state_path, requests).await;
                 });
             }
         });
@@ -115,7 +132,11 @@ pub fn control_socket_path(state_path: &Path) -> PathBuf {
     state_path.with_extension("control.sock")
 }
 
-async fn handle_stream(stream: async_std::os::unix::net::UnixStream, state_path: &Path) -> Result<()> {
+async fn handle_stream(
+    stream: async_std::os::unix::net::UnixStream,
+    state_path: &Path,
+    requests: Sender<RuntimeControlRequest>,
+) -> Result<()> {
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
     reader.read_line(&mut line).await?;
@@ -124,15 +145,29 @@ async fn handle_stream(stream: async_std::os::unix::net::UnixStream, state_path:
     }
 
     let response = match serde_json::from_str::<ControlRequest>(&line) {
-        Ok(ControlRequest::Probe {}) => {
-            let state = load_state(state_path)?;
-            let runtime = current_runtime(state_path)?;
-            ControlResponse::Probe {
-                tunnel_name: state.config.name,
-                code: state.config.code,
-                runtime,
-            }
-        },
+        Ok(ControlRequest::Probe {}) => round_trip_runtime_request(
+            requests,
+            |reply| RuntimeControlRequest::Probe { reply },
+            || {
+                let state = load_state(state_path)?;
+                Ok(ControlResponse::Probe {
+                    tunnel_name: state.config.name,
+                    code: state.config.code,
+                    runtime: current_runtime(state_path)?,
+                })
+            },
+        )
+        .await,
+        Ok(ControlRequest::Echo { payload }) => round_trip_runtime_request(
+            requests,
+            move |reply| RuntimeControlRequest::Echo { payload, reply },
+            || {
+                Err(Error::PersistentState(
+                    "the local tunnel runtime is not accepting live control requests yet".into(),
+                ))
+            },
+        )
+        .await,
         Err(error) => ControlResponse::Error {
             message: format!("invalid control request: {error}"),
         },
@@ -144,6 +179,32 @@ async fn handle_stream(stream: async_std::os::unix::net::UnixStream, state_path:
     writer.write_all(&bytes).await?;
     writer.flush().await?;
     Ok(())
+}
+
+async fn round_trip_runtime_request<Fallback, Build>(
+    requests: Sender<RuntimeControlRequest>,
+    build: Build,
+    fallback: Fallback,
+) -> ControlResponse
+where
+    Fallback: FnOnce() -> Result<ControlResponse>,
+    Build: FnOnce(Sender<Result<ControlResponse>>) -> RuntimeControlRequest,
+{
+    let (reply_tx, reply_rx) = async_channel::bounded(1);
+    if requests.send(build(reply_tx)).await.is_err() {
+        return fallback().unwrap_or_else(error_response);
+    }
+    match reply_rx.recv().await {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => error_response(error),
+        Err(_) => fallback().unwrap_or_else(error_response),
+    }
+}
+
+fn error_response(error: Error) -> ControlResponse {
+    ControlResponse::Error {
+        message: error.to_string(),
+    }
 }
 
 fn current_runtime(state_path: &Path) -> Result<TunnelRuntimeStatus> {
