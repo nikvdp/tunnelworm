@@ -198,19 +198,28 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
     let intent = CliIntent::from(&config);
     let peer_intent = forward::exchange_cli_intents(&mut session.wormhole, &intent).await?;
     let plan = forward::build_cli_plan(&intent, &peer_intent)?;
+    for target in &plan.targets {
+        println!(
+            "{} peer {}:{} -> local {}:{}",
+            style.status("Forwarding:"),
+            target.listen_host,
+            target.listen_port,
+            target.connect_host,
+            target.connect_port
+        );
+    }
     let (_cancel_tx, cancel_rx) = async_channel::bounded(1);
     forward::run_forwarding(session, plan, cancel_rx, |event| match event {
         ForwardEvent::Listening {
-            name,
+            name: _,
             listen_host,
             listen_port,
             connect_host,
             connect_port,
         } => {
             println!(
-                "{} {} on {}:{} -> {}:{}",
+                "{} local {}:{} -> peer {}:{}",
                 style.status("Listening:"),
-                name,
                 listen_host,
                 listen_port,
                 connect_host,

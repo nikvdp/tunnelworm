@@ -123,6 +123,8 @@ fn build_daemon_plan(here: &[DaemonRule], there: &[DaemonRule]) -> Result<Forwar
             }),
             RuleDirection::Remote => targets.push(TargetPlan {
                 name: format!("rule-{}", idx + 1),
+                listen_host: listen.host,
+                listen_port: listen.port,
                 connect_host: connect.host,
                 connect_port: connect.port,
             }),
@@ -135,6 +137,8 @@ fn build_daemon_plan(here: &[DaemonRule], there: &[DaemonRule]) -> Result<Forwar
         match rule.direction {
             RuleDirection::Local => targets.push(TargetPlan {
                 name: format!("peer-rule-{}", idx + 1),
+                listen_host: listen.host,
+                listen_port: listen.port,
                 connect_host: connect.host,
                 connect_port: connect.port,
             }),
@@ -382,11 +386,6 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
 
     loop {
         let result: Result<()> = async {
-            runtime_status.write(TunnelRuntimeStatus {
-                phase: TunnelRuntimePhase::Starting,
-                detail: Some("connecting to the peer".into()),
-            })?;
-            eprintln!("{} connecting to the peer...", style.status("Status:"));
             let reconnect_role = reconnect_role(&state);
             let prepared = session::prepare_session(SessionOptions {
                 mailbox: state.config.mailbox.clone(),
@@ -400,7 +399,14 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 eprintln!("{} {welcome}", style.label("Mailbox:"));
             }
 
-            let mut connected = prepared.connect().await?;
+            let mut connected = connect_with_progress(
+                prepared,
+                &style,
+                &runtime_status,
+                reconnect_role,
+                &state.config.code,
+            )
+            .await?;
             eprintln!("{} peer connected", style.status("Status:"));
             eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
             runtime_status.write(TunnelRuntimeStatus {
@@ -411,6 +417,17 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
 
             let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, &intent).await?;
             let plan = forward::build_cli_plan(&intent, &peer_intent)?;
+            for target in &plan.targets {
+                let detail = format!(
+                    "peer {}:{} -> local {}:{}",
+                    target.listen_host, target.listen_port, target.connect_host, target.connect_port
+                );
+                runtime_status.write(TunnelRuntimeStatus {
+                    phase: TunnelRuntimePhase::Up,
+                    detail: Some(detail.clone()),
+                })?;
+                eprintln!("{} {detail}", style.status("Forwarding:"));
+            }
             let (_cancel_tx, cancel_rx) = async_channel::bounded(1);
             let runtime_status_ref = &runtime_status;
             forward::run_forwarding(connected, plan, cancel_rx, |event| match event {
@@ -529,6 +546,41 @@ fn is_transit_disconnect(error: &Error) -> bool {
     match error {
         Error::Wormhole(wormhole) => wormhole.to_string().contains("Transit error"),
         other => other.to_string().contains("Transit error"),
+    }
+}
+
+async fn connect_with_progress(
+    prepared: session::PreparedSession,
+    style: &crate::cli::AnsiStyle,
+    runtime_status: &PersistentRuntimeStatus,
+    reconnect_role: PersistentRole,
+    code: &str,
+) -> Result<session::ConnectedSession> {
+    let connect_future = prepared.connect().fuse();
+    futures::pin_mut!(connect_future);
+    loop {
+        let tick = task::sleep(std::time::Duration::from_secs(1)).fuse();
+        futures::pin_mut!(tick);
+        futures::select! {
+            connected = connect_future => return connected,
+            () = tick => {
+                let (phase, detail) = match reconnect_role {
+                    PersistentRole::Allocate => (
+                        TunnelRuntimePhase::Waiting,
+                        format!("waiting for the peer to join code {code}..."),
+                    ),
+                    PersistentRole::Join => (
+                        TunnelRuntimePhase::Starting,
+                        "connecting to the peer...".to_string(),
+                    ),
+                };
+                runtime_status.write(TunnelRuntimeStatus {
+                    phase,
+                    detail: Some(detail.clone()),
+                })?;
+                eprintln!("{} {detail}", style.status("Status:"));
+            }
+        }
     }
 }
 

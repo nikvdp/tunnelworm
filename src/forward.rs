@@ -32,6 +32,8 @@ pub struct ListenerPlan {
 #[derive(Debug, Clone)]
 pub struct TargetPlan {
     pub name: String,
+    pub listen_host: String,
+    pub listen_port: u16,
     pub connect_host: String,
     pub connect_port: u16,
 }
@@ -195,6 +197,8 @@ pub fn build_cli_plan(here: &CliIntent, there: &CliIntent) -> Result<ForwardPlan
         if target_side == Side::Here {
             targets.push(TargetPlan {
                 name,
+                listen_host,
+                listen_port,
                 connect_host,
                 connect_port,
             });
