@@ -48,6 +48,9 @@ Examples:
   Stream stdin over a live named tunnel:
     echo hello | tunnelworm pipe office-ssh
 
+  Open the remote login shell over a live named tunnel:
+    tunnelworm shell office-ssh
+
   Inspect one saved tunnel endpoint by name:
     tunnelworm tunnel status office-ssh
 
@@ -124,8 +127,13 @@ Examples:
   Send piped stdin through one live named tunnel:
     echo hello | tunnelworm pipe office-ssh
 
-  Wait on the other side and print received data:
-    tunnelworm pipe laptop-ssh";
+  Fully redirected stdio needs an explicit direction:
+    tunnelworm pipe office-ssh --send < input.txt > /dev/null
+
+Notes:
+  If stdin is redirected and stdout is still a terminal, tunnelworm sends.
+  If stdout is redirected and stdin is still a terminal, tunnelworm receives.
+  If both stdin and stdout are redirected, pass --send or --receive explicitly.";
 
 const SHELL_AFTER_HELP: &str = "\
 Examples:
@@ -133,7 +141,10 @@ Examples:
     tunnelworm shell office-ssh
 
   Run one remote command and print its output locally:
-    tunnelworm shell office-ssh --command 'pwd'";
+    tunnelworm shell office-ssh --command 'pwd'
+
+Notes:
+  Without --command, tunnelworm starts the remote user's login shell.";
 
 const COMPLETION_AFTER_HELP: &str = "\
 Examples:
@@ -185,11 +196,12 @@ fn styled_top_level_long_about() -> StyledStr {
 
 fn styled_top_level_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    echo hello | tunnelworm pipe office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm self-update\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
+        "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    echo hello | tunnelworm pipe office-ssh\n\n  {}:\n    tunnelworm shell office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm self-update\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `tunnelworm pipe` infers send or receive from stdio unless both ends are redirected.\n  - Without `--command`, `tunnelworm shell` starts the remote login shell.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
         help_header("Examples"),
         help_bold("One-off forward"),
         help_bold("Named persistent tunnel"),
         help_bold("Pipe over a live named tunnel"),
+        help_bold("Shell over a live named tunnel"),
         help_bold("Manage saved endpoints"),
         help_bold("Shell completion"),
         help_bold("Self-update"),
@@ -253,19 +265,21 @@ fn styled_tunnel_delete_after_help() -> StyledStr {
 
 fn styled_pipe_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    echo hello | tunnelworm pipe office-ssh\n\n  {}:\n    tunnelworm pipe laptop-ssh",
+        "{}:\n  {}:\n    echo hello | tunnelworm pipe office-ssh\n\n  {}:\n    tunnelworm pipe office-ssh --send < input.txt > /dev/null\n\n{}:\n  - If stdin is redirected and stdout is still a terminal, tunnelworm sends.\n  - If stdout is redirected and stdin is still a terminal, tunnelworm receives.\n  - If both stdin and stdout are redirected, pass `--send` or `--receive` explicitly.",
         help_header("Examples"),
         help_bold("Send piped stdin through one live named tunnel"),
-        help_bold("Wait on the other side and print what arrives"),
+        help_bold("Force the sending side when both ends are redirected"),
+        help_header("Notes"),
     ))
 }
 
 fn styled_shell_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm shell office-ssh\n\n  {}:\n    tunnelworm shell office-ssh --command 'pwd'",
+        "{}:\n  {}:\n    tunnelworm shell office-ssh\n\n  {}:\n    tunnelworm shell office-ssh --command 'pwd'\n\n{}:\n  - Without `--command`, tunnelworm starts the remote login shell.\n  - `--command` runs one remote command and returns its exit code locally.",
         help_header("Examples"),
         help_bold("Open an interactive shell on the remote end"),
         help_bold("Run one remote command and print its output locally"),
+        help_header("Notes"),
     ))
 }
 
@@ -602,7 +616,7 @@ pub struct TunnelPipeArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-#[command(about = "Open a remote shell over one live named tunnel")]
+#[command(about = "Open the remote login shell, or run one remote command, over one live named tunnel")]
 #[command(after_long_help = SHELL_AFTER_HELP)]
 pub struct TunnelShellArgs {
     #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to use")]
