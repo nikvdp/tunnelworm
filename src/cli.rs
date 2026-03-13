@@ -33,7 +33,7 @@ Examples:
   Named persistent tunnel, creator side bootstraps a saved tunnel:
     fowl tunnel create office-ssh --connect 22
 
-  Named persistent tunnel, peer side joins with the one-time invite:
+  Named persistent tunnel, peer side joins with the printed code:
     fowl tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal
 
   Start one saved tunnel endpoint later by name:
@@ -64,10 +64,10 @@ Notes:
 
 const TUNNEL_CREATE_AFTER_HELP: &str = "\
 Examples:
-  Create the service side of a saved tunnel and print a one-time invite:
+  Create the service side of a saved tunnel and print a bootstrap code:
     fowl tunnel create office-ssh --connect 22
 
-  Create the client side using the printed invite from the other machine:
+  Create the client side using the printed code from the other machine:
     fowl tunnel create laptop-ssh --listen 9097 --code 7-cobalt-signal";
 
 const TUNNEL_AFTER_HELP: &str = "\
