@@ -414,15 +414,14 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             let runtime_status_ref = &runtime_status;
             forward::run_forwarding(connected, plan, cancel_rx, |event| match event {
                 ForwardEvent::Listening {
-                    name,
+                    name: _,
                     listen_host,
                     listen_port,
                     connect_host,
                     connect_port,
                 } => {
-                    let detail = format!(
-                        "{name} on {listen_host}:{listen_port} -> {connect_host}:{connect_port}"
-                    );
+                    let detail =
+                        format!("{listen_host}:{listen_port} -> {connect_host}:{connect_port}");
                     let _ = runtime_status_ref.write(TunnelRuntimeStatus {
                         phase: TunnelRuntimePhase::Up,
                         detail: Some(detail.clone()),
