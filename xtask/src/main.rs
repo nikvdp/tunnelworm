@@ -69,7 +69,7 @@ fn release(args: Vec<String>) -> Result<()> {
     let updated_cargo_toml = update_root_package_version(&cargo_toml, &next_version)?;
     let updated_cargo_lock = if cargo_lock_path.exists() {
         let cargo_lock = fs::read_to_string(&cargo_lock_path)?;
-        Some(update_lockfile_version(&cargo_lock, "fowl-rs", &next_version)?)
+        Some(update_lockfile_version(&cargo_lock, "tunnelworm", &next_version)?)
     } else {
         None
     };

@@ -23,37 +23,37 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            asset_name: fowl-linux-x86_64-musl.tar.gz
+            asset_name: tunnelworm-linux-x86_64-musl.tar.gz
             binary_suffix: ""
-            package_stem: fowl-linux-x86_64-musl
+            package_stem: tunnelworm-linux-x86_64-musl
             archive_kind: tar.gz
             build_with_zig: true
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            asset_name: fowl-linux-aarch64-musl.tar.gz
+            asset_name: tunnelworm-linux-aarch64-musl.tar.gz
             binary_suffix: ""
-            package_stem: fowl-linux-aarch64-musl
+            package_stem: tunnelworm-linux-aarch64-musl
             archive_kind: tar.gz
             build_with_zig: true
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            asset_name: fowl-macos-x86_64.tar.gz
+            asset_name: tunnelworm-macos-x86_64.tar.gz
             binary_suffix: ""
-            package_stem: fowl-macos-x86_64
+            package_stem: tunnelworm-macos-x86_64
             archive_kind: tar.gz
             build_with_zig: false
           - os: macos-14
             target: aarch64-apple-darwin
-            asset_name: fowl-macos-aarch64.tar.gz
+            asset_name: tunnelworm-macos-aarch64.tar.gz
             binary_suffix: ""
-            package_stem: fowl-macos-aarch64
+            package_stem: tunnelworm-macos-aarch64
             archive_kind: tar.gz
             build_with_zig: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            asset_name: fowl-windows-x86_64.zip
+            asset_name: tunnelworm-windows-x86_64.zip
             binary_suffix: ".exe"
-            package_stem: fowl-windows-x86_64
+            package_stem: tunnelworm-windows-x86_64
             archive_kind: zip
             build_with_zig: false
 
@@ -99,8 +99,8 @@ jobs:
           mkdir -p dist
           package_dir="dist/${{ matrix.package_stem }}"
           mkdir -p "$package_dir"
-          cp "target/${{ matrix.target }}/release/fowl${{ matrix.binary_suffix }}" "$package_dir/"
-          cp "target/${{ matrix.target }}/release/fowld${{ matrix.binary_suffix }}" "$package_dir/"
+          cp "target/${{ matrix.target }}/release/tunnelworm${{ matrix.binary_suffix }}" "$package_dir/"
+          cp "target/${{ matrix.target }}/release/tunnelwormd${{ matrix.binary_suffix }}" "$package_dir/"
           tar -C dist -czf "dist/${{ matrix.asset_name }}" "${{ matrix.package_stem }}"
           rm -rf "$package_dir"
 
@@ -110,8 +110,8 @@ jobs:
         run: |
           $packageDir = "dist/${{ matrix.package_stem }}"
           New-Item -ItemType Directory -Force $packageDir | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/fowl${{ matrix.binary_suffix }}" $packageDir
-          Copy-Item "target/${{ matrix.target }}/release/fowld${{ matrix.binary_suffix }}" $packageDir
+          Copy-Item "target/${{ matrix.target }}/release/tunnelworm${{ matrix.binary_suffix }}" $packageDir
+          Copy-Item "target/${{ matrix.target }}/release/tunnelwormd${{ matrix.binary_suffix }}" $packageDir
           Compress-Archive -Path "$packageDir/*" -DestinationPath "dist/${{ matrix.asset_name }}"
           Remove-Item -Recurse -Force $packageDir
 
