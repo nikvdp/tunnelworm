@@ -156,7 +156,7 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
     if let Some((existing_path, _)) = find_state_by_name(&cwd, tunnel_name)? {
         if !config.overwrite {
             return Err(Error::PersistentState(format!(
-                "a saved tunnel named {:?} already exists at {}. Use `fowl tunnel up {}` to start it, `fowl tunnel delete {}` to remove it later, or rerun `fowl tunnel create {}` with --overwrite to replace it.",
+                "a saved tunnel named {:?} already exists at {}. Use `tunnelworm tunnel up {}` to start it, `tunnelworm tunnel delete {}` to remove it later, or rerun `tunnelworm tunnel create {}` with --overwrite to replace it.",
                 tunnel_name,
                 existing_path.display(),
                 tunnel_name,
@@ -291,9 +291,9 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     println!("  {} {}", style.label("name:"), state.config.name);
     println!("  {}", style.label("file:"));
     println!("    {}", state_path.display());
-    println!("  {} fowl tunnel up {}", style.label("reuse:"), state.config.name);
+    println!("  {} tunnelworm tunnel up {}", style.label("reuse:"), state.config.name);
     println!(
-        "  {} fowl tunnel delete {}",
+        "  {} tunnelworm tunnel delete {}",
         style.label("delete:"),
         state.config.name
     );
@@ -438,7 +438,7 @@ fn resolve_named_state(
     })?;
     find_state_by_name(cwd, name)?.ok_or_else(|| {
         Error::PersistentState(format!(
-            "no saved tunnel endpoint named {:?} was found; create it first with `fowl tunnel create {}` or point `fowl tunnel up` at a specific file with --state",
+            "no saved tunnel endpoint named {:?} was found; create it first with `tunnelworm tunnel create {}` or point `tunnelworm tunnel up` at a specific file with --state",
             name, name
         ))
     })
@@ -595,7 +595,7 @@ pub fn state_file_name(config: &PersistentConfig) -> Result<String> {
 }
 
 pub fn project_state_dir(cwd: &Path) -> PathBuf {
-    cwd.join(".fowl")
+    cwd.join(".tunnelworm")
 }
 
 pub fn user_state_dir() -> Result<PathBuf> {
@@ -604,7 +604,7 @@ pub fn user_state_dir() -> Result<PathBuf> {
         let base = env::var_os("APPDATA").ok_or_else(|| {
             Error::PersistentState("APPDATA is not set; cannot resolve the user state directory".into())
         })?;
-        return Ok(PathBuf::from(base).join("fowl"));
+        return Ok(PathBuf::from(base).join("tunnelworm"));
     }
 
     #[cfg(target_os = "macos")]
@@ -615,18 +615,18 @@ pub fn user_state_dir() -> Result<PathBuf> {
         return Ok(PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("fowl"));
+            .join("tunnelworm"));
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         if let Some(xdg_state_home) = env::var_os("XDG_STATE_HOME") {
-            return Ok(PathBuf::from(xdg_state_home).join("fowl"));
+            return Ok(PathBuf::from(xdg_state_home).join("tunnelworm"));
         }
         let home = env::var_os("HOME").ok_or_else(|| {
             Error::PersistentState("HOME is not set; cannot resolve the user state directory".into())
         })?;
-        Ok(PathBuf::from(home).join(".local").join("state").join("fowl"))
+        Ok(PathBuf::from(home).join(".local").join("state").join("tunnelworm"))
     }
 }
 
@@ -730,14 +730,14 @@ fn print_tunnel_intro(
         match config.local_half() {
             crate::cli::ForwardHalf::Listen => {
                 println!(
-                    "  {} fowl tunnel create PEER_NAME --connect HOST:PORT --code {}",
+                    "  {} tunnelworm tunnel create PEER_NAME --connect HOST:PORT --code {}",
                     style.label("preferred:"),
                     code
                 );
             },
             crate::cli::ForwardHalf::Connect => {
                 println!(
-                    "  {} fowl tunnel create PEER_NAME --listen LISTEN_HOST:LISTEN_PORT --code {}",
+                    "  {} tunnelworm tunnel create PEER_NAME --listen LISTEN_HOST:LISTEN_PORT --code {}",
                     style.label("preferred:"),
                     code
                 );
@@ -788,17 +788,17 @@ fn print_state_block(
     println!("    {}", state_path.display());
     if let Some(tunnel_name) = &config.tunnel_name {
         println!(
-            "  {} fowl tunnel up {}",
+            "  {} tunnelworm tunnel up {}",
             style.label("reuse:"),
             tunnel_name
         );
         println!(
-            "  {} fowl tunnel status {}",
+            "  {} tunnelworm tunnel status {}",
             style.label("status:"),
             tunnel_name
         );
         println!(
-            "  {} fowl tunnel delete {}",
+            "  {} tunnelworm tunnel delete {}",
             style.label("delete:"),
             tunnel_name
         );
@@ -841,11 +841,11 @@ fn exec_persistent_daemon(state_path: &Path) -> Result<()> {
 
 fn persistent_daemon_path() -> Result<PathBuf> {
     let current_exe = env::current_exe()?;
-    let sibling = current_exe.with_file_name("fowld");
+    let sibling = current_exe.with_file_name("tunnelwormd");
     if sibling.exists() {
         return Ok(sibling);
     }
-    Ok(PathBuf::from("fowld"))
+    Ok(PathBuf::from("tunnelwormd"))
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {

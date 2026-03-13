@@ -1,5 +1,5 @@
 [package]
-name = "fowl-rs"
+name = "tunnelworm"
 version = "0.0.1"
 edition = "2024"
 
@@ -8,16 +8,16 @@ members = ["xtask"]
 resolver = "2"
 
 [lib]
-name = "fowl_rs"
+name = "tunnelworm"
 path = "src/lib.rs"
 
 [[bin]]
-name = "fowl"
-path = "src/bin/fowl.rs"
+name = "tunnelworm"
+path = "src/bin/tunnelworm.rs"
 
 [[bin]]
-name = "fowld"
-path = "src/bin/fowld.rs"
+name = "tunnelwormd"
+path = "src/bin/tunnelwormd.rs"
 
 [dependencies]
 async-channel = "2.5"

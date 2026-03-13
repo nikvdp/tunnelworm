@@ -11,53 +11,53 @@ use crate::{
     spec::{LocalSpec, RemoteSpec},
 };
 
-const FOWL_LONG_ABOUT: &str = "\
+const TUNNELWORM_LONG_ABOUT: &str = "\
 Create a TCP port forward between two terminals over a magic-wormhole session.
 
-Top-level `fowl ...` is the one-off path.
-`fowl tunnel create ...` bootstraps a named persistent tunnel.
-`fowl tunnel up ...` starts a saved persistent tunnel by name.
-`fowl tunnel list`, `status`, and `delete` manage saved tunnel endpoints.
+Top-level `tunnelworm ...` is the one-off path.
+`tunnelworm tunnel create ...` bootstraps a named persistent tunnel.
+`tunnelworm tunnel up ...` starts a saved persistent tunnel by name.
+`tunnelworm tunnel list`, `status`, and `delete` manage saved tunnel endpoints.
 
 One side provides `--listen` and the peer provides `--connect`.
 If you use SSH-style compatibility syntax instead, `-L` still needs a
 corresponding `-R` on the peer and `-R` still needs a corresponding `-L`.";
 
-const FOWL_AFTER_HELP: &str = "\
+const TUNNELWORM_AFTER_HELP: &str = "\
 Examples:
   One-off forward, connector side allocates a code:
-    fowl --connect 22
+    tunnelworm --connect 22
 
   Matching one-off peer listens locally with that code:
-    fowl --listen 9000 7-cobalt-signal
+    tunnelworm --listen 9000 7-cobalt-signal
 
   Named persistent tunnel, creator side bootstraps a saved tunnel:
-    fowl tunnel create office-ssh --connect 22
+    tunnelworm tunnel create office-ssh --connect 22
 
   Named persistent tunnel, peer side joins with the printed code:
-    fowl tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal
+    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal
 
   Start one saved tunnel endpoint later by name:
-    fowl tunnel up office-ssh
+    tunnelworm tunnel up office-ssh
 
   Start one saved tunnel endpoint later by explicit state path:
-    fowl tunnel up --state ./.fowl/office-ssh--abcd1234.json
+    tunnelworm tunnel up --state ./.tunnelworm/office-ssh--abcd1234.json
 
   Inspect one saved tunnel endpoint by name:
-    fowl tunnel status office-ssh
+    tunnelworm tunnel status office-ssh
 
   List saved tunnel endpoints:
-    fowl tunnel list
+    tunnelworm tunnel list
 
   Delete one saved tunnel endpoint:
-    fowl tunnel delete office-ssh
+    tunnelworm tunnel delete office-ssh
 
   Generate a zsh completion script:
-    fowl completion zsh
+    tunnelworm completion zsh
 
   SSH-style compatibility syntax still works for one-off flows:
-    fowl -R 9000:localhost:22
-    fowl -L 9000:localhost:22 7-cobalt-signal
+    tunnelworm -R 9000:localhost:22
+    tunnelworm -L 9000:localhost:22 7-cobalt-signal
 
 Notes:
   - `--listen` always needs a complementary `--connect` on the peer.
@@ -69,55 +69,55 @@ Notes:
 const TUNNEL_CREATE_AFTER_HELP: &str = "\
 Examples:
   Create the service side of a saved tunnel and print a bootstrap code:
-    fowl tunnel create office-ssh --connect 22
+    tunnelworm tunnel create office-ssh --connect 22
 
   Create the client side using the printed code from the other machine:
-    fowl tunnel create laptop-ssh --listen 9097 --code 7-cobalt-signal";
+    tunnelworm tunnel create laptop-ssh --listen 9097 --code 7-cobalt-signal";
 
 const TUNNEL_AFTER_HELP: &str = "\
 Examples:
   Create the service side of a saved tunnel:
-    fowl tunnel create office-ssh --connect 22
+    tunnelworm tunnel create office-ssh --connect 22
 
   Start that saved tunnel later by name:
-    fowl tunnel up office-ssh";
+    tunnelworm tunnel up office-ssh";
 
 const TUNNEL_UP_AFTER_HELP: &str = "\
 Examples:
   Start a saved tunnel endpoint by name:
-    fowl tunnel up laptop-ssh
+    tunnelworm tunnel up laptop-ssh
 
   Start a saved tunnel endpoint by explicit state file:
-    fowl tunnel up --state ./.fowl/laptop-ssh--abcd1234.json";
+    tunnelworm tunnel up --state ./.tunnelworm/laptop-ssh--abcd1234.json";
 
 const TUNNEL_LIST_AFTER_HELP: &str = "\
 Example:
   List the saved tunnel endpoints available on this machine:
-    fowl tunnel list";
+    tunnelworm tunnel list";
 
 const TUNNEL_STATUS_AFTER_HELP: &str = "\
 Examples:
   Inspect a saved tunnel endpoint by name:
-    fowl tunnel status laptop-ssh
+    tunnelworm tunnel status laptop-ssh
 
   Inspect an explicit state file directly:
-    fowl tunnel status --state ./.fowl/laptop-ssh--abcd1234.json";
+    tunnelworm tunnel status --state ./.tunnelworm/laptop-ssh--abcd1234.json";
 
 const TUNNEL_DELETE_AFTER_HELP: &str = "\
 Examples:
   Delete a saved tunnel endpoint by name:
-    fowl tunnel delete laptop-ssh
+    tunnelworm tunnel delete laptop-ssh
 
   Delete an explicit state file directly:
-    fowl tunnel delete --state ./.fowl/laptop-ssh--abcd1234.json";
+    tunnelworm tunnel delete --state ./.tunnelworm/laptop-ssh--abcd1234.json";
 
 const COMPLETION_AFTER_HELP: &str = "\
 Examples:
   Print a zsh completion script:
-    fowl completion zsh
+    tunnelworm completion zsh
 
   Save a bash completion script locally:
-    fowl completion bash > ~/.local/share/bash-completion/completions/fowl";
+    tunnelworm completion bash > ~/.local/share/bash-completion/completions/tunnelworm";
 
 #[derive(Debug, Clone)]
 pub struct FowlConfig {
@@ -150,7 +150,7 @@ pub struct TunnelDeleteConfig {
 }
 
 #[derive(Debug, Clone)]
-pub enum FowlInvocation {
+pub enum TunnelwormInvocation {
     Run(FowlConfig),
     Completion(Shell),
     TunnelCreate(FowlConfig),
@@ -338,14 +338,14 @@ pub struct TunnelDeleteArgs {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "fowl")]
+#[command(name = "tunnelworm")]
 #[command(about = "Create a TCP forward over a magic-wormhole session")]
-#[command(long_about = FOWL_LONG_ABOUT)]
-#[command(after_long_help = FOWL_AFTER_HELP)]
+#[command(long_about = TUNNELWORM_LONG_ABOUT)]
+#[command(after_long_help = TUNNELWORM_AFTER_HELP)]
 #[command(version)]
 #[command(args_conflicts_with_subcommands = true)]
 #[command(subcommand_precedence_over_arg = true)]
-pub struct FowlCli {
+pub struct TunnelwormCli {
     #[command(subcommand)]
     pub command: Option<FowlSubcommand>,
     #[command(flatten)]
@@ -353,14 +353,14 @@ pub struct FowlCli {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "fowl")]
+#[command(name = "tunnelworm")]
 #[command(about = "Create a TCP forward over a magic-wormhole session")]
-#[command(long_about = FOWL_LONG_ABOUT)]
-#[command(after_long_help = FOWL_AFTER_HELP)]
+#[command(long_about = TUNNELWORM_LONG_ABOUT)]
+#[command(after_long_help = TUNNELWORM_AFTER_HELP)]
 #[command(version)]
 #[command(args_conflicts_with_subcommands = true)]
 #[command(subcommand_precedence_over_arg = true)]
-pub struct FowlCompletionCli {
+pub struct TunnelwormCompletionCli {
     #[command(subcommand)]
     pub command: Option<FowlSubcommand>,
     #[command(flatten)]
@@ -381,10 +381,10 @@ pub struct CompletionArgs {
     pub shell: Shell,
 }
 
-impl TryFrom<FowlCli> for FowlInvocation {
+impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
     type Error = Error;
 
-    fn try_from(value: FowlCli) -> Result<Self> {
+    fn try_from(value: TunnelwormCli) -> Result<Self> {
         match value.command {
             Some(FowlSubcommand::Completion(args)) => Ok(Self::Completion(args.shell)),
             Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
@@ -523,7 +523,7 @@ impl FowlConfig {
     }
 
     pub fn peer_preferred_command(&self, code: &str, persistent: bool) -> Option<String> {
-        let prefix = if persistent { "fowl tunnel up" } else { "fowl" };
+        let prefix = if persistent { "tunnelworm tunnel up" } else { "tunnelworm" };
         match self.local_half() {
             ForwardHalf::Listen => Some(format!("{prefix} --connect HOST:PORT {code}")),
             ForwardHalf::Connect => {
@@ -536,7 +536,7 @@ impl FowlConfig {
     pub fn peer_ssh_command(&self, code: &str) -> Option<String> {
         match self.local_half() {
             ForwardHalf::Listen => Some(format!(
-                "fowl -R {}:HOST:PORT {code}",
+                "tunnelworm -R {}:HOST:PORT {code}",
                 self.locals
                     .first()
                     .and_then(|spec| spec.local_listen_port)
@@ -544,7 +544,7 @@ impl FowlConfig {
                     .unwrap_or_else(|| "LISTEN_PORT".into())
             )),
             ForwardHalf::Connect => Some(format!(
-                "fowl -L LISTEN_PORT:{}:{} {code}",
+                "tunnelworm -L LISTEN_PORT:{}:{} {code}",
                 self.remotes
                     .first()
                     .and_then(|spec| spec.connect_address.clone())
@@ -560,7 +560,7 @@ impl FowlConfig {
     }
 
     pub fn persistent_reuse_command(path: &Path) -> String {
-        format!("fowl tunnel up --state {}", path.display())
+        format!("tunnelworm tunnel up --state {}", path.display())
     }
 
     pub fn persistent_reset_command(&self, code: &str) -> Option<String> {
@@ -569,7 +569,7 @@ impl FowlConfig {
             ForwardHalf::Listen => {
                 let spec = self.locals.first()?;
                 Some(format!(
-                    "fowl tunnel create {} --listen {}:{} --overwrite",
+                    "tunnelworm tunnel create {} --listen {}:{} --overwrite",
                     tunnel_name,
                     spec.bind_interface.as_deref().unwrap_or("127.0.0.1"),
                     spec.local_listen_port
@@ -580,7 +580,7 @@ impl FowlConfig {
             ForwardHalf::Connect => {
                 let spec = self.remotes.first()?;
                 let base = format!(
-                    "fowl tunnel create {} --connect {}:{}",
+                    "tunnelworm tunnel create {} --connect {}:{}",
                     tunnel_name,
                     spec.connect_address.as_deref().unwrap_or("127.0.0.1"),
                     spec.local_connect_port

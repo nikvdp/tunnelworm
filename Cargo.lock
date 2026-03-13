@@ -960,28 +960,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fowl-rs"
-version = "0.0.1"
-dependencies = [
- "async-channel 2.5.0",
- "async-std",
- "clap",
- "clap_complete",
- "ed25519-dalek",
- "fs2",
- "futures",
- "hex",
- "magic-wormhole",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "thiserror",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
 name = "fs2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2444,6 +2422,28 @@ dependencies = [
  "sha1",
  "thiserror",
  "utf-8",
+]
+
+[[package]]
+name = "tunnelworm"
+version = "0.0.1"
+dependencies = [
+ "async-channel 2.5.0",
+ "async-std",
+ "clap",
+ "clap_complete",
+ "ed25519-dalek",
+ "fs2",
+ "futures",
+ "hex",
+ "magic-wormhole",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

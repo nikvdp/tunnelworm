@@ -260,5 +260,5 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
 }
 
 pub async fn run_fowld() -> Result<()> {
-    Err(Error::NotImplemented("fowld runtime"))
+    Err(Error::NotImplemented("tunnelwormd runtime"))
 }
