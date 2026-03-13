@@ -90,7 +90,7 @@ impl LocalSpec {
                     ),
                     local_listen_port: Some(listen_port),
                     remote_connect_port: Some(connect_port),
-                    bind_interface: Some((*bind_interface).to_string()),
+                    bind_interface: Some(canonical_host_token(bind_interface).to_string()),
                 })
             },
             _ => Err(Error::Usage(
@@ -116,7 +116,7 @@ impl LocalSpec {
                 name: implicit_forward_name(index),
                 local_listen_port: Some(parse_port(listen_port)?),
                 remote_connect_port: None,
-                bind_interface: Some((*bind_interface).to_string()),
+                bind_interface: Some(canonical_host_token(bind_interface).to_string()),
             }),
             _ => Err(Error::Usage(
                 "listen specs must be port or bind_address:port".into(),
@@ -206,7 +206,7 @@ impl RemoteSpec {
                     name: ssh_service_name(None, listen_port, connect_host, connect_port),
                     local_connect_port: Some(connect_port),
                     remote_listen_port: Some(listen_port),
-                    connect_address: Some((*connect_host).to_string()),
+                    connect_address: Some(canonical_host_token(connect_host).to_string()),
                 })
             },
             [bind_interface, listen_port, connect_host, connect_port] => {
@@ -221,7 +221,7 @@ impl RemoteSpec {
                     ),
                     local_connect_port: Some(connect_port),
                     remote_listen_port: Some(listen_port),
-                    connect_address: Some((*connect_host).to_string()),
+                    connect_address: Some(canonical_host_token(connect_host).to_string()),
                 })
             },
             _ => Err(Error::Usage(
@@ -237,13 +237,21 @@ impl RemoteSpec {
 
         let parts: Vec<_> = input.split(':').collect();
         match parts.as_slice() {
+            [connect_port] => Ok(Self {
+                name: implicit_forward_name(index),
+                local_connect_port: Some(parse_port(connect_port)?),
+                remote_listen_port: None,
+                connect_address: Some("127.0.0.1".to_string()),
+            }),
             [connect_host, connect_port] if !connect_host.is_empty() => Ok(Self {
                 name: implicit_forward_name(index),
                 local_connect_port: Some(parse_port(connect_port)?),
                 remote_listen_port: None,
-                connect_address: Some((*connect_host).to_string()),
+                connect_address: Some(canonical_host_token(connect_host).to_string()),
             }),
-            _ => Err(Error::Usage("connect specs must be host:port".into())),
+            _ => Err(Error::Usage(
+                "connect specs must be port or host:port".into(),
+            )),
         }
     }
 
