@@ -11,9 +11,10 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelStatusConfig, TunnelUpConfig},
+    cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelStatusConfig, TunnelUpConfig},
     control::{ControlResponse, control_socket_path, probe_runtime},
     error::{Error, Result},
+    pipe,
     persistent_auth,
     session::{self, SessionOptions},
     spec::{LocalSpec, RemoteSpec},
@@ -361,6 +362,14 @@ pub fn delete_named_tunnel(config: &TunnelDeleteConfig) -> Result<()> {
     println!("  {} {}", style.label("file:"), state_path.display());
 
     Ok(())
+}
+
+pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let (state_path, _state) =
+        resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let mode = pipe::infer_pipe_mode(config.mode)?;
+    pipe::run_pipe(&state_path, mode).await
 }
 
 fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option<(PathBuf, PersistentState)>> {

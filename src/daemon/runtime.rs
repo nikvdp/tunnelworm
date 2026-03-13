@@ -17,6 +17,7 @@ use crate::{
     error::{Error, Result},
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
     mux::{ChannelKind, IncomingChannel, MuxSession, MuxTransport},
+    pipe::PipeMode,
     persistent::{PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
     session::{self, SessionOptions},
     status_line::StatusLine,
@@ -68,6 +69,12 @@ struct TcpConnect {
 struct PortForwardOpen {
     connect_host: String,
     connect_port: u16,
+}
+
+#[derive(Default)]
+struct PipeBroker {
+    pending_sender: Mutex<Option<async_std::os::unix::net::UnixStream>>,
+    pending_channel: Mutex<Option<crate::mux::MuxChannel>>,
 }
 
 fn parse_listen_endpoint(input: &str) -> Result<TcpListen> {
@@ -176,7 +183,10 @@ fn build_daemon_plan(here: &[DaemonRule], there: &[DaemonRule]) -> Result<Forwar
     Ok(ForwardPlan { listeners, targets })
 }
 
-async fn bridge_tcp_and_channel(stream: TcpStream, channel: crate::mux::MuxChannel) -> Result<()> {
+async fn bridge_stream_and_channel<S>(stream: S, channel: crate::mux::MuxChannel) -> Result<()>
+where
+    S: async_std::io::Read + async_std::io::Write + Clone + Unpin + Send + 'static,
+{
     let mut reader = stream.clone();
     let mut writer = stream;
     let channel_for_send = channel.clone();
@@ -207,6 +217,7 @@ async fn bridge_tcp_and_channel(stream: TcpStream, channel: crate::mux::MuxChann
 
 async fn handle_incoming_channel(
     incoming: IncomingChannel,
+    pipe_broker: Arc<PipeBroker>,
     runtime_status: &PersistentRuntimeStatus,
     style: &crate::cli::AnsiStyle,
 ) -> Result<()> {
@@ -237,9 +248,32 @@ async fn handle_incoming_channel(
                 detail: Some(detail.clone()),
             })?;
             eprintln!("{} {detail}", style.status("Forwarding:"));
-            bridge_tcp_and_channel(stream, incoming.channel).await
+            bridge_stream_and_channel(stream, incoming.channel).await
         },
-        ChannelKind::Pipe | ChannelKind::Shell => Err(Error::NotImplemented(
+        ChannelKind::Pipe => {
+            let (maybe_sender, maybe_channel) = take_pending_pipe_pair(&pipe_broker);
+            match (maybe_sender, maybe_channel) {
+                (Some(local_stream), None) => {
+                    task::spawn(attach_pipe_stream(
+                        PipeMode::Send,
+                        local_stream,
+                        incoming.channel,
+                    ));
+                    Ok(())
+                },
+                (None, None) => queue_pipe_channel(&pipe_broker, incoming.channel),
+                (maybe_sender, Some(existing_channel)) => {
+                    if let Some(local_stream) = maybe_sender {
+                        let _ = queue_pipe_sender(&pipe_broker, local_stream);
+                    }
+                    let _ = queue_pipe_channel(&pipe_broker, existing_channel);
+                    Err(Error::Session(
+                        "another pipe channel is already waiting locally".into(),
+                    ))
+                },
+            }
+        },
+        ChannelKind::Shell => Err(Error::NotImplemented(
             "incoming pipe or shell channels are not wired yet",
         )),
     }
@@ -247,14 +281,16 @@ async fn handle_incoming_channel(
 
 async fn drive_incoming_channels(
     session: MuxSession,
+    pipe_broker: Arc<PipeBroker>,
     runtime_status: PersistentRuntimeStatus,
     style: crate::cli::AnsiStyle,
 ) {
     while let Ok(incoming) = session.next_incoming().await {
+        let pipe_broker = pipe_broker.clone();
         let runtime_status = runtime_status.clone();
         let style = style.clone();
         task::spawn(async move {
-            let _ = handle_incoming_channel(incoming, &runtime_status, &style).await;
+            let _ = handle_incoming_channel(incoming, pipe_broker, &runtime_status, &style).await;
         });
     }
 }
@@ -310,7 +346,7 @@ async fn drive_listener(
                         let channel = session
                             .open_channel(ChannelKind::PortForward, serde_json::to_vec(&open)?)
                             .await?;
-                        bridge_tcp_and_channel(stream, channel).await
+                        bridge_stream_and_channel(stream, channel).await
                     }.await;
                     let _ = result;
                 });
@@ -320,9 +356,111 @@ async fn drive_listener(
     }
 }
 
+async fn attach_pipe_stream(
+    mode: PipeMode,
+    local_stream: async_std::os::unix::net::UnixStream,
+    channel: crate::mux::MuxChannel,
+) {
+    let _ = match mode {
+        PipeMode::Send => pump_local_to_channel(local_stream, channel).await,
+        PipeMode::Receive => pump_channel_to_local(channel, local_stream).await,
+    };
+}
+
+async fn pump_local_to_channel(
+    mut local_stream: async_std::os::unix::net::UnixStream,
+    channel: crate::mux::MuxChannel,
+) -> Result<()> {
+    let mut buffer = vec![0u8; 16 * 1024];
+    loop {
+        let read = local_stream.read(&mut buffer).await?;
+        if read == 0 {
+            channel.close().await?;
+            return Ok(());
+        }
+        channel.send(buffer[..read].to_vec()).await?;
+    }
+}
+
+async fn pump_channel_to_local(
+    channel: crate::mux::MuxChannel,
+    mut local_stream: async_std::os::unix::net::UnixStream,
+) -> Result<()> {
+    while let Some(payload) = channel.recv().await? {
+        local_stream.write_all(&payload).await?;
+        local_stream.flush().await?;
+    }
+    Ok(())
+}
+
+fn queue_pipe_sender(
+    broker: &Arc<PipeBroker>,
+    stream: async_std::os::unix::net::UnixStream,
+) -> Result<()> {
+    let mut pending_sender = broker
+        .pending_sender
+        .lock()
+        .expect("pipe broker mutex poisoned");
+    if pending_sender.is_some() {
+        return Err(Error::Session(
+            "a local pipe send command is already waiting for the peer".into(),
+        ));
+    }
+    *pending_sender = Some(stream);
+    Ok(())
+}
+
+fn queue_pipe_channel(
+    broker: &Arc<PipeBroker>,
+    channel: crate::mux::MuxChannel,
+) -> Result<()> {
+    let mut pending_channel = broker
+        .pending_channel
+        .lock()
+        .expect("pipe broker mutex poisoned");
+    if pending_channel.is_some() {
+        return Err(Error::Session(
+            "a remote pipe channel is already waiting for the local sender".into(),
+        ));
+    }
+    *pending_channel = Some(channel);
+    Ok(())
+}
+
+fn take_pending_pipe_pair(
+    broker: &Arc<PipeBroker>,
+) -> (
+    Option<async_std::os::unix::net::UnixStream>,
+    Option<crate::mux::MuxChannel>,
+) {
+    let mut pending_sender = broker
+        .pending_sender
+        .lock()
+        .expect("pipe broker mutex poisoned");
+    let mut pending_channel = broker
+        .pending_channel
+        .lock()
+        .expect("pipe broker mutex poisoned");
+    (pending_sender.take(), pending_channel.take())
+}
+
+fn clear_pending_pipe_state(broker: &Arc<PipeBroker>) {
+    let _ = broker
+        .pending_sender
+        .lock()
+        .expect("pipe broker mutex poisoned")
+        .take();
+    let _ = broker
+        .pending_channel
+        .lock()
+        .expect("pipe broker mutex poisoned")
+        .take();
+}
+
 async fn handle_runtime_control_request(
     request: RuntimeControlRequest,
     session: Option<MuxSession>,
+    pipe_broker: Arc<PipeBroker>,
     state_path: &Path,
 ) -> Result<()> {
     match request {
@@ -366,6 +504,37 @@ async fn handle_runtime_control_request(
                 }))
                 .await;
         },
+        RuntimeControlRequest::Pipe { mode, stream } => {
+            let Some(session) = session else {
+                return Err(Error::Session("the tunnel is not connected yet".into()));
+            };
+            match mode {
+                PipeMode::Receive => {
+                    let channel = session.open_channel(ChannelKind::Pipe, Vec::new()).await?;
+                    task::spawn(attach_pipe_stream(PipeMode::Receive, stream, channel));
+                },
+                PipeMode::Send => {
+                    let (maybe_sender, maybe_channel) = take_pending_pipe_pair(&pipe_broker);
+                    match (maybe_sender, maybe_channel) {
+                        (None, Some(channel)) => {
+                            task::spawn(attach_pipe_stream(PipeMode::Send, stream, channel));
+                        },
+                        (None, None) => {
+                            queue_pipe_sender(&pipe_broker, stream)?;
+                        },
+                        (Some(existing_sender), maybe_channel) => {
+                            let _ = queue_pipe_sender(&pipe_broker, existing_sender);
+                            if let Some(channel) = maybe_channel {
+                                let _ = queue_pipe_channel(&pipe_broker, channel);
+                            }
+                            return Err(Error::Session(
+                                "a pipe send command is already waiting for the peer".into(),
+                            ));
+                        },
+                    }
+                },
+            }
+        },
     }
     Ok(())
 }
@@ -373,6 +542,7 @@ async fn handle_runtime_control_request(
 async fn drive_runtime_control_requests(
     requests: Receiver<RuntimeControlRequest>,
     live_session: Arc<Mutex<Option<MuxSession>>>,
+    pipe_broker: Arc<PipeBroker>,
     state_path: PathBuf,
 ) {
     while let Ok(request) = requests.recv().await {
@@ -380,7 +550,8 @@ async fn drive_runtime_control_requests(
             .lock()
             .expect("live session mutex poisoned")
             .clone();
-        let _ = handle_runtime_control_request(request, session, &state_path).await;
+        let _ =
+            handle_runtime_control_request(request, session, pipe_broker.clone(), &state_path).await;
     }
 }
 
@@ -586,10 +757,12 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     let runtime_status = PersistentRuntimeStatus::new(&_state_path)?;
     let (control_tx, control_rx) = async_channel::unbounded::<RuntimeControlRequest>();
     let live_session = Arc::new(Mutex::new(None::<MuxSession>));
+    let pipe_broker = Arc::new(PipeBroker::default());
     let _control = ControlServer::spawn(&_state_path, control_tx)?;
     task::spawn(drive_runtime_control_requests(
         control_rx,
         live_session.clone(),
+        pipe_broker.clone(),
         _state_path.clone(),
     ));
     let mut state = load_state(&_state_path)?;
@@ -661,6 +834,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             }
             let incoming_task = task::spawn(drive_incoming_channels(
                 mux_session.clone(),
+                pipe_broker.clone(),
                 runtime_status.clone(),
                 style.clone(),
             ));
@@ -684,6 +858,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             }
             let _ = incoming_task.cancel().await;
             *live_session.lock().expect("live session mutex poisoned") = None;
+            clear_pending_pipe_state(&pipe_broker);
             transport_result
         }
         .await;

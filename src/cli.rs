@@ -18,6 +18,7 @@ Top-level `tunnelworm ...` is the one-off path.
 `tunnelworm tunnel create ...` bootstraps a named persistent tunnel.
 `tunnelworm tunnel up ...` starts a saved persistent tunnel by name.
 `tunnelworm tunnel list`, `status`, and `delete` manage saved tunnel endpoints.
+`tunnelworm pipe <name>` streams stdin/stdout over one live named tunnel.
 `tunnelworm self-update` refreshes the installed binaries from GitHub releases.
 
 One side provides `--listen` and the peer provides `--connect`.
@@ -43,6 +44,9 @@ Examples:
 
   Start one saved tunnel endpoint later by explicit state path:
     tunnelworm tunnel up --state ./.tunnelworm/office-ssh--abcd1234.json
+
+  Stream stdin over a live named tunnel:
+    echo hello | tunnelworm pipe office-ssh
 
   Inspect one saved tunnel endpoint by name:
     tunnelworm tunnel status office-ssh
@@ -115,6 +119,14 @@ Examples:
   Delete an explicit state file directly:
     tunnelworm tunnel delete --state ./.tunnelworm/laptop-ssh--abcd1234.json";
 
+const PIPE_AFTER_HELP: &str = "\
+Examples:
+  Send piped stdin through one live named tunnel:
+    echo hello | tunnelworm pipe office-ssh
+
+  Wait on the other side and print received data:
+    tunnelworm pipe laptop-ssh";
+
 const COMPLETION_AFTER_HELP: &str = "\
 Examples:
   Print a zsh completion script:
@@ -165,10 +177,11 @@ fn styled_top_level_long_about() -> StyledStr {
 
 fn styled_top_level_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm self-update\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
+        "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    echo hello | tunnelworm pipe office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm self-update\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
         help_header("Examples"),
         help_bold("One-off forward"),
         help_bold("Named persistent tunnel"),
+        help_bold("Pipe over a live named tunnel"),
         help_bold("Manage saved endpoints"),
         help_bold("Shell completion"),
         help_bold("Self-update"),
@@ -230,6 +243,15 @@ fn styled_tunnel_delete_after_help() -> StyledStr {
     ))
 }
 
+fn styled_pipe_after_help() -> StyledStr {
+    StyledStr::from(format!(
+        "{}:\n  {}:\n    echo hello | tunnelworm pipe office-ssh\n\n  {}:\n    tunnelworm pipe laptop-ssh",
+        help_header("Examples"),
+        help_bold("Send piped stdin through one live named tunnel"),
+        help_bold("Wait on the other side and print what arrives"),
+    ))
+}
+
 fn styled_completion_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm completion bash > ~/.local/share/bash-completion/completions/tunnelworm",
@@ -274,6 +296,7 @@ pub fn tunnelworm_command() -> Command {
                     sub.after_long_help(styled_tunnel_delete_after_help())
                 })
         })
+        .mut_subcommand("pipe", |sub| sub.after_long_help(styled_pipe_after_help()))
 }
 
 pub fn tunnelworm_completion_command() -> Command {
@@ -302,6 +325,7 @@ pub fn tunnelworm_completion_command() -> Command {
                     sub.after_long_help(styled_tunnel_delete_after_help())
                 })
         })
+        .mut_subcommand("pipe", |sub| sub.after_long_help(styled_pipe_after_help()))
 }
 
 pub fn parse_tunnelworm_cli() -> TunnelwormCli {
@@ -340,10 +364,18 @@ pub struct TunnelDeleteConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct TunnelPipeConfig {
+    pub name: Option<String>,
+    pub state: Option<PathBuf>,
+    pub mode: Option<crate::pipe::PipeMode>,
+}
+
+#[derive(Debug, Clone)]
 pub enum TunnelwormInvocation {
     Run(FowlConfig),
     Completion(Shell),
     SelfUpdate,
+    Pipe(TunnelPipeConfig),
     TunnelCreate(FowlConfig),
     TunnelUp(TunnelUpConfig),
     TunnelList,
@@ -528,6 +560,20 @@ pub struct TunnelDeleteArgs {
     pub state: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Args)]
+#[command(about = "Stream stdin/stdout over one live named tunnel")]
+#[command(after_long_help = PIPE_AFTER_HELP)]
+pub struct TunnelPipeArgs {
+    #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to use")]
+    pub name: Option<String>,
+    #[arg(long = "state", value_name = "PATH", required_unless_present = "name", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+    #[arg(long = "send", conflicts_with = "receive", help = "Treat this local pipe endpoint as the sending side")]
+    pub send: bool,
+    #[arg(long = "receive", conflicts_with = "send", help = "Treat this local pipe endpoint as the receiving side")]
+    pub receive: bool,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "tunnelworm")]
 #[command(about = "Create a TCP forward over a magic-wormhole session")]
@@ -562,6 +608,7 @@ pub struct TunnelwormCompletionCli {
 pub enum FowlSubcommand {
     Completion(CompletionArgs),
     SelfUpdate(SelfUpdateArgs),
+    Pipe(TunnelPipeArgs),
     Tunnel(TunnelArgs),
 }
 
@@ -585,6 +632,17 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
         match value.command {
             Some(FowlSubcommand::Completion(args)) => Ok(Self::Completion(args.shell)),
             Some(FowlSubcommand::SelfUpdate(_)) => Ok(Self::SelfUpdate),
+            Some(FowlSubcommand::Pipe(args)) => Ok(Self::Pipe(TunnelPipeConfig {
+                name: args.name,
+                state: args.state,
+                mode: if args.send {
+                    Some(crate::pipe::PipeMode::Send)
+                } else if args.receive {
+                    Some(crate::pipe::PipeMode::Receive)
+                } else {
+                    None
+                },
+            })),
             Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
                 TunnelCommand::Create(args) => Ok(Self::TunnelCreate(build_config(
                     args.common,

@@ -44,6 +44,7 @@ async fn main() {
             }
         },
         TunnelwormInvocation::SelfUpdate => tunnelworm::self_update::run_self_update(),
+        TunnelwormInvocation::Pipe(config) => persistent::run_named_pipe(&config).await,
         TunnelwormInvocation::TunnelCreate(config) => persistent::create_named_tunnel(&config).await,
         TunnelwormInvocation::TunnelUp(config) => persistent::up_named_tunnel(&config),
         TunnelwormInvocation::TunnelList => persistent::list_named_tunnels(),
