@@ -6,16 +6,18 @@ use std::{
     process::Command,
 };
 
+use async_std::io::WriteExt;
 use fs2::FileExt;
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelStatusConfig, TunnelUpConfig},
+    cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
     control::{ControlResponse, control_socket_path, probe_runtime},
     error::{Error, Result},
     pipe,
     persistent_auth,
+    shell::{self, ShellOpen},
     session::{self, SessionOptions},
     spec::{LocalSpec, RemoteSpec},
     status_line::StatusLine,
@@ -370,6 +372,31 @@ pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
         resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
     let mode = pipe::infer_pipe_mode(config.mode)?;
     pipe::run_pipe(&state_path, mode).await
+}
+
+pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
+    let cwd = env::current_dir()?;
+    let (state_path, _state) =
+        resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let mut stream = async_std::os::unix::net::UnixStream::connect(control_socket_path(&state_path))
+        .await
+        .map_err(|error| {
+            Error::Session(format!(
+                "could not connect to the local tunnel control socket: {error}"
+            ))
+        })?;
+    let (rows, cols) = shell::current_terminal_size();
+    let request = serde_json::to_string(&crate::control::ControlRequest::Shell {
+        open: ShellOpen {
+            command: config.command.clone(),
+            rows,
+            cols,
+        },
+    })?;
+    stream.write_all(request.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    stream.flush().await?;
+    shell::run_local_shell_client(stream).await
 }
 
 fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option<(PathBuf, PersistentState)>> {

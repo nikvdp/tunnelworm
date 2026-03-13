@@ -127,6 +127,14 @@ Examples:
   Wait on the other side and print received data:
     tunnelworm pipe laptop-ssh";
 
+const SHELL_AFTER_HELP: &str = "\
+Examples:
+  Open an interactive shell on the remote end of one live named tunnel:
+    tunnelworm shell office-ssh
+
+  Run one remote command and print its output locally:
+    tunnelworm shell office-ssh --command 'pwd'";
+
 const COMPLETION_AFTER_HELP: &str = "\
 Examples:
   Print a zsh completion script:
@@ -252,6 +260,15 @@ fn styled_pipe_after_help() -> StyledStr {
     ))
 }
 
+fn styled_shell_after_help() -> StyledStr {
+    StyledStr::from(format!(
+        "{}:\n  {}:\n    tunnelworm shell office-ssh\n\n  {}:\n    tunnelworm shell office-ssh --command 'pwd'",
+        help_header("Examples"),
+        help_bold("Open an interactive shell on the remote end"),
+        help_bold("Run one remote command and print its output locally"),
+    ))
+}
+
 fn styled_completion_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm completion bash > ~/.local/share/bash-completion/completions/tunnelworm",
@@ -297,6 +314,7 @@ pub fn tunnelworm_command() -> Command {
                 })
         })
         .mut_subcommand("pipe", |sub| sub.after_long_help(styled_pipe_after_help()))
+        .mut_subcommand("shell", |sub| sub.after_long_help(styled_shell_after_help()))
 }
 
 pub fn tunnelworm_completion_command() -> Command {
@@ -326,6 +344,7 @@ pub fn tunnelworm_completion_command() -> Command {
                 })
         })
         .mut_subcommand("pipe", |sub| sub.after_long_help(styled_pipe_after_help()))
+        .mut_subcommand("shell", |sub| sub.after_long_help(styled_shell_after_help()))
 }
 
 pub fn parse_tunnelworm_cli() -> TunnelwormCli {
@@ -371,11 +390,19 @@ pub struct TunnelPipeConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct TunnelShellConfig {
+    pub name: Option<String>,
+    pub state: Option<PathBuf>,
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub enum TunnelwormInvocation {
     Run(FowlConfig),
     Completion(Shell),
     SelfUpdate,
     Pipe(TunnelPipeConfig),
+    Shell(TunnelShellConfig),
     TunnelCreate(FowlConfig),
     TunnelUp(TunnelUpConfig),
     TunnelList,
@@ -574,6 +601,18 @@ pub struct TunnelPipeArgs {
     pub receive: bool,
 }
 
+#[derive(Debug, Clone, Args)]
+#[command(about = "Open a remote shell over one live named tunnel")]
+#[command(after_long_help = SHELL_AFTER_HELP)]
+pub struct TunnelShellArgs {
+    #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to use")]
+    pub name: Option<String>,
+    #[arg(long = "state", value_name = "PATH", required_unless_present = "name", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+    #[arg(long = "command", short = 'c', value_name = "COMMAND", help = "Run one remote command instead of starting the remote login shell")]
+    pub command: Option<String>,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "tunnelworm")]
 #[command(about = "Create a TCP forward over a magic-wormhole session")]
@@ -609,6 +648,7 @@ pub enum FowlSubcommand {
     Completion(CompletionArgs),
     SelfUpdate(SelfUpdateArgs),
     Pipe(TunnelPipeArgs),
+    Shell(TunnelShellArgs),
     Tunnel(TunnelArgs),
 }
 
@@ -642,6 +682,11 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                 } else {
                     None
                 },
+            })),
+            Some(FowlSubcommand::Shell(args)) => Ok(Self::Shell(TunnelShellConfig {
+                name: args.name,
+                state: args.state,
+                command: args.command,
             })),
             Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
                 TunnelCommand::Create(args) => Ok(Self::TunnelCreate(build_config(

@@ -18,6 +18,7 @@ async fn main() {
             std::process::exit(2);
         },
     };
+    let mut shell_exit_code: Option<u32> = None;
 
     let result = match invocation {
         TunnelwormInvocation::Run(config) => tunnelworm::session::run_fowl(config).await,
@@ -45,6 +46,13 @@ async fn main() {
         },
         TunnelwormInvocation::SelfUpdate => tunnelworm::self_update::run_self_update(),
         TunnelwormInvocation::Pipe(config) => persistent::run_named_pipe(&config).await,
+        TunnelwormInvocation::Shell(config) => match persistent::run_named_shell(&config).await {
+            Ok(code) => {
+                shell_exit_code = Some(code);
+                Ok(())
+            },
+            Err(error) => Err(error),
+        },
         TunnelwormInvocation::TunnelCreate(config) => persistent::create_named_tunnel(&config).await,
         TunnelwormInvocation::TunnelUp(config) => persistent::up_named_tunnel(&config),
         TunnelwormInvocation::TunnelList => persistent::list_named_tunnels(),
@@ -55,5 +63,8 @@ async fn main() {
     if let Err(error) = result {
         eprintln!("{} {error}", stderr_style().error("Error:"));
         std::process::exit(1);
+    }
+    if let Some(code) = shell_exit_code {
+        std::process::exit(code as i32);
     }
 }

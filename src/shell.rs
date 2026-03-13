@@ -1,14 +1,17 @@
 use std::{
+    io::IsTerminal,
     sync::mpsc,
     thread,
+    time::Duration,
 };
 
 use async_channel::Sender;
 use async_std::{
-    io::{ReadExt, WriteExt},
+    io::{self, ReadExt, WriteExt},
     os::unix::net::UnixStream,
     task,
 };
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
 use futures::{FutureExt, select};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
@@ -71,6 +74,86 @@ pub async fn bridge_local_shell_stream(
     send_task.await?;
     recv_task.await?;
     Ok(())
+}
+
+pub async fn run_local_shell_client(stream: UnixStream) -> Result<u32> {
+    let stdin_tty = std::io::stdin().is_terminal();
+    let stdout_tty = std::io::stdout().is_terminal();
+    let _raw_mode = if stdin_tty && stdout_tty {
+        Some(RawModeGuard::enable()?)
+    } else {
+        None
+    };
+
+    let mut reader = stream.clone();
+    let mut writer = stream;
+    let (stdin_tx, stdin_rx) = async_channel::unbounded::<Option<Vec<u8>>>();
+    spawn_local_stdin(stdin_tx);
+    let mut stdout = io::stdout();
+    let mut stdin_closed = false;
+    let mut last_size = if stdout_tty {
+        Some(current_terminal_size())
+    } else {
+        None
+    };
+
+    loop {
+        let stdin_fut = stdin_rx.recv().fuse();
+        let packet_fut = read_stream_packet(&mut reader).fuse();
+        let tick_fut = task::sleep(Duration::from_millis(200)).fuse();
+        futures::pin_mut!(stdin_fut, packet_fut, tick_fut);
+
+        select! {
+            stdin = stdin_fut => match stdin {
+                Ok(Some(bytes)) => {
+                    write_stream_packet(&mut writer, &ShellPacket::Input { data: bytes }).await?;
+                },
+                Ok(None) | Err(_) if !stdin_closed => {
+                    stdin_closed = true;
+                },
+                _ => {},
+            },
+            packet = packet_fut => match packet? {
+                Some(ShellPacket::Started { .. }) => {},
+                Some(ShellPacket::Output { data }) => {
+                    stdout.write_all(&data).await?;
+                    stdout.flush().await?;
+                },
+                Some(ShellPacket::Exit { code, signal }) => {
+                    if let Some(signal) = signal {
+                        return Err(Error::Session(format!("remote shell terminated by {signal}")));
+                    }
+                    return Ok(code);
+                },
+                Some(ShellPacket::Error { message }) => return Err(Error::Session(message)),
+                Some(ShellPacket::Input { .. }) | Some(ShellPacket::Resize { .. }) => {},
+                None => return Ok(0),
+            },
+            () = tick_fut => {
+                if let Some(previous) = last_size {
+                    let current = current_terminal_size();
+                    if current != previous {
+                        last_size = Some(current);
+                        write_stream_packet(
+                            &mut writer,
+                            &ShellPacket::Resize {
+                                rows: current.0,
+                                cols: current.1,
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn current_terminal_size() -> (u16, u16) {
+    match size() {
+        Ok((cols, rows)) => (rows, cols),
+        Err(_) => (24, 80),
+    }
 }
 
 pub async fn run_remote_shell(channel: MuxChannel, open: ShellOpen) -> Result<()> {
@@ -302,4 +385,44 @@ fn spawn_shell_waiter(
             )));
         },
     });
+}
+
+fn spawn_local_stdin(sender: Sender<Option<Vec<u8>>>) {
+    thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let mut buffer = vec![0u8; 16 * 1024];
+        loop {
+            match std::io::Read::read(&mut stdin, &mut buffer) {
+                Ok(0) => {
+                    let _ = sender.send_blocking(None);
+                    break;
+                },
+                Ok(read) => {
+                    if sender.send_blocking(Some(buffer[..read].to_vec())).is_err() {
+                        break;
+                    }
+                },
+                Err(_) => {
+                    let _ = sender.send_blocking(None);
+                    break;
+                },
+            }
+        }
+    });
+}
+
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Result<Self> {
+        enable_raw_mode()
+            .map_err(|error| Error::Session(format!("could not enable raw terminal mode: {error}")))?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
 }
