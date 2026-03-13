@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand};
+use clap_complete::Shell;
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -50,6 +51,9 @@ Examples:
 
   Delete one saved tunnel endpoint:
     fowl tunnel delete office-ssh
+
+  Generate a zsh completion script:
+    fowl completion zsh
 
   SSH-style compatibility syntax still works for one-off flows:
     fowl -R 9000:localhost:22
@@ -107,6 +111,14 @@ Examples:
   Delete an explicit state file directly:
     fowl tunnel delete --state ./.fowl/laptop-ssh--abcd1234.json";
 
+const COMPLETION_AFTER_HELP: &str = "\
+Examples:
+  Print a zsh completion script:
+    fowl completion zsh
+
+  Save a bash completion script locally:
+    fowl completion bash > ~/.local/share/bash-completion/completions/fowl";
+
 #[derive(Debug, Clone)]
 pub struct FowlConfig {
     pub tunnel_name: Option<String>,
@@ -140,6 +152,7 @@ pub struct TunnelDeleteConfig {
 #[derive(Debug, Clone)]
 pub enum FowlInvocation {
     Run(FowlConfig),
+    Completion(Shell),
     TunnelCreate(FowlConfig),
     TunnelUp(TunnelUpConfig),
     TunnelList,
@@ -334,7 +347,16 @@ pub struct FowlCli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum FowlSubcommand {
+    Completion(CompletionArgs),
     Tunnel(TunnelArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "Generate shell completion scripts")]
+#[command(after_long_help = COMPLETION_AFTER_HELP)]
+pub struct CompletionArgs {
+    #[arg(value_name = "SHELL", help = "Shell to generate completions for")]
+    pub shell: Shell,
 }
 
 impl TryFrom<FowlCli> for FowlInvocation {
@@ -342,6 +364,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
 
     fn try_from(value: FowlCli) -> Result<Self> {
         match value.command {
+            Some(FowlSubcommand::Completion(args)) => Ok(Self::Completion(args.shell)),
             Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
                 TunnelCommand::Create(args) => Ok(Self::TunnelCreate(build_config(
                     args.common,

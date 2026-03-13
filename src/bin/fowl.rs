@@ -1,4 +1,6 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::generate;
+use std::io::{self, ErrorKind, Write};
 
 use fowl_rs::{
     cli::{stderr_style, FowlCli, FowlInvocation},
@@ -18,6 +20,21 @@ async fn main() {
 
     let result = match invocation {
         FowlInvocation::Run(config) => fowl_rs::session::run_fowl(config).await,
+        FowlInvocation::Completion(shell) => {
+            let mut command = FowlCli::command();
+            let name = command.get_name().to_string();
+            let mut output = Vec::new();
+            generate(shell, &mut command, name, &mut output);
+            if let Err(error) = io::stdout().write_all(&output) {
+                if error.kind() == ErrorKind::BrokenPipe {
+                    Ok(())
+                } else {
+                    Err(error.into())
+                }
+            } else {
+                Ok(())
+            }
+        },
         FowlInvocation::TunnelCreate(config) => persistent::create_named_tunnel(&config).await,
         FowlInvocation::TunnelUp(config) => persistent::up_named_tunnel(&config),
         FowlInvocation::TunnelList => persistent::list_named_tunnels(),

@@ -23,6 +23,7 @@ path = "src/bin/fowld.rs"
 async-channel = "2.5"
 async-std = { version = "1.13", features = ["attributes"] }
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 fs2 = "0.4"
 futures = "0.3"
