@@ -180,6 +180,7 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
         let mut connected = prepared.connect().await?;
         session::authenticate_persistent_peer(&mut connected, &mut state).await?;
         save_state(&state_path, &state)?;
+        println!("{} starting tunnel...", style.status("Status:"));
         return exec_persistent_daemon(&state_path);
     }
 
@@ -190,7 +191,7 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
                 print_tunnel_intro(&style, "Persistent reuse:", &state.config.code, config);
                 print_state_block(&style, config, path, &state.config.code);
                 println!();
-                println!("{} handing off to the persistent worker...", style.status("Status:"));
+                println!("{} starting tunnel...", style.status("Status:"));
                 return exec_persistent_daemon(path);
             }
             if !matches_creator_config(&state, config) && !config.overwrite {
@@ -207,7 +208,7 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
             print_tunnel_intro(&style, "Persistent reuse:", &state.config.code, config);
             print_state_block(&style, config, &state_path, &state.config.code);
             println!();
-            println!("{} handing off to the persistent worker...", style.status("Status:"));
+            println!("{} starting tunnel...", style.status("Status:"));
             return exec_persistent_daemon(&state_path);
         }
         println!("Overwriting existing persistent state at {}.", state_path.display());
@@ -225,6 +226,7 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
     let mut connected = prepared.connect().await?;
     session::authenticate_persistent_peer(&mut connected, &mut state).await?;
     save_state(&state_path, &state)?;
+    println!("{} starting tunnel...", style.status("Status:"));
     exec_persistent_daemon(&state_path)
 }
 
@@ -245,6 +247,7 @@ pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
     print_tunnel_intro(&style, "Persistent reuse:", &state.config.code, &replay_config);
     print_state_block(&style, &replay_config, &state_path, &state.config.code);
     println!();
+    println!("{} starting tunnel...", style.status("Status:"));
     exec_persistent_daemon(&state_path)
 }
 

@@ -386,6 +386,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 phase: TunnelRuntimePhase::Starting,
                 detail: Some("connecting to the peer".into()),
             })?;
+            eprintln!("{} connecting to the peer...", style.status("Status:"));
             let reconnect_role = reconnect_role(&state);
             let prepared = session::prepare_session(SessionOptions {
                 mailbox: state.config.mailbox.clone(),
@@ -445,18 +446,14 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             },
             Err(error) if is_hard_persistent_failure(&error) => return Err(error),
             Err(error) => {
-                let retry_hint = persistent_retry_message(&state.config.code, &error, retry_delay);
-                let phase = if is_expected_rendezvous_gap(&error) {
-                    TunnelRuntimePhase::Waiting
-                } else {
-                    TunnelRuntimePhase::Retrying
-                };
-                runtime_status.write(TunnelRuntimeStatus {
-                    phase,
-                    detail: Some(retry_hint.clone()),
-                })?;
-                eprintln!("{} {retry_hint}", style.status("Status:"));
-                task::sleep(std::time::Duration::from_secs(retry_delay)).await;
+                sleep_with_retry_status(
+                    &style,
+                    &runtime_status,
+                    &state.config.code,
+                    &error,
+                    retry_delay,
+                )
+                .await?;
                 retry_delay = next_retry_delay(&error, retry_delay);
                 continue;
             },
@@ -533,6 +530,30 @@ fn is_transit_disconnect(error: &Error) -> bool {
         Error::Wormhole(wormhole) => wormhole.to_string().contains("Transit error"),
         other => other.to_string().contains("Transit error"),
     }
+}
+
+async fn sleep_with_retry_status(
+    style: &crate::cli::AnsiStyle,
+    runtime_status: &PersistentRuntimeStatus,
+    code: &str,
+    error: &Error,
+    retry_delay: u64,
+) -> Result<()> {
+    let phase = if is_expected_rendezvous_gap(error) {
+        TunnelRuntimePhase::Waiting
+    } else {
+        TunnelRuntimePhase::Retrying
+    };
+    for remaining in (1..=retry_delay).rev() {
+        let retry_hint = persistent_retry_message(code, error, remaining);
+        runtime_status.write(TunnelRuntimeStatus {
+            phase: phase.clone(),
+            detail: Some(retry_hint.clone()),
+        })?;
+        eprintln!("{} {retry_hint}", style.status("Status:"));
+        task::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    Ok(())
 }
 
 struct PersistentRuntimeStatus {
