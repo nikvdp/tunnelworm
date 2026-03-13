@@ -1,15 +1,17 @@
-use clap::{CommandFactory, Parser};
+use clap::CommandFactory;
 use clap_complete::generate;
 use std::io::{self, ErrorKind, Write};
 
 use tunnelworm::{
-    cli::{stderr_style, TunnelwormCli, TunnelwormCompletionCli, TunnelwormInvocation},
+    cli::{
+        parse_tunnelworm_cli, stderr_style, tunnelworm_completion_command, TunnelwormInvocation,
+    },
     persistent,
 };
 
 #[async_std::main]
 async fn main() {
-    let args = TunnelwormCli::parse();
+    let args = parse_tunnelworm_cli();
     let invocation = match TunnelwormInvocation::try_from(args) {
         Ok(invocation) => invocation,
         Err(error) => {
@@ -21,7 +23,7 @@ async fn main() {
     let result = match invocation {
         TunnelwormInvocation::Run(config) => tunnelworm::session::run_fowl(config).await,
         TunnelwormInvocation::Completion(shell) => {
-            let mut command = TunnelwormCompletionCli::command();
+            let mut command = tunnelworm_completion_command();
             let name = command.get_name().to_string();
             let mut output = Vec::new();
             generate(shell, &mut command, name, &mut output);
