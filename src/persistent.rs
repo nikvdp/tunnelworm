@@ -7,6 +7,7 @@ use std::{
 };
 
 use fs2::FileExt;
+use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -15,6 +16,7 @@ use crate::{
     persistent_auth,
     session::{self, SessionOptions},
     spec::{LocalSpec, RemoteSpec},
+    status_line::StatusLine,
 };
 
 const STATE_VERSION: u32 = 1;
@@ -174,10 +176,9 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
         print_tunnel_intro(&style, "Tunnel create:", &expected.code, config);
         print_state_block(&style, config, &state_path, &expected.code);
         println!();
-        println!("{} waiting for the persistent peer...", style.status("Status:"));
         let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
         let prepared = session::prepare_session(SessionOptions::from(config)).await?;
-        let mut connected = prepared.connect().await?;
+        let mut connected = connect_with_spinner(prepared, "waiting for the persistent peer...").await?;
         session::authenticate_persistent_peer(&mut connected, &mut state).await?;
         save_state(&state_path, &state)?;
         println!("{} starting tunnel...", style.status("Status:"));
@@ -221,13 +222,33 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
     print_tunnel_intro(&style, "Tunnel create:", &prepared.code, config);
     print_state_block(&style, config, &state_path, &prepared.code);
     println!();
-    println!("{} waiting for the persistent peer...", style.status("Status:"));
     let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
-    let mut connected = prepared.connect().await?;
+    let mut connected = connect_with_spinner(prepared, "waiting for the persistent peer...").await?;
     session::authenticate_persistent_peer(&mut connected, &mut state).await?;
     save_state(&state_path, &state)?;
     println!("{} starting tunnel...", style.status("Status:"));
     exec_persistent_daemon(&state_path)
+}
+
+async fn connect_with_spinner(
+    prepared: session::PreparedSession,
+    message: &str,
+) -> Result<session::ConnectedSession> {
+    let style = stdout_style();
+    let mut spinner = StatusLine::stdout();
+    let connect_future = prepared.connect().fuse();
+    futures::pin_mut!(connect_future);
+    loop {
+        let tick = async_std::task::sleep(std::time::Duration::from_millis(125)).fuse();
+        futures::pin_mut!(tick);
+        futures::select! {
+            connected = connect_future => {
+                spinner.clear()?;
+                return connected;
+            },
+            () = tick => spinner.update(&style.status("Status:"), message)?,
+        }
+    }
 }
 
 pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {

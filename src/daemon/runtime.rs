@@ -16,6 +16,7 @@ use crate::{
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
     persistent::{PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
     session::{self, SessionOptions},
+    status_line::StatusLine,
 };
 
 #[derive(Debug, Clone)]
@@ -556,13 +557,17 @@ async fn connect_with_progress(
     reconnect_role: PersistentRole,
     code: &str,
 ) -> Result<session::ConnectedSession> {
+    let mut spinner = StatusLine::stderr();
     let connect_future = prepared.connect().fuse();
     futures::pin_mut!(connect_future);
     loop {
-        let tick = task::sleep(std::time::Duration::from_secs(1)).fuse();
+        let tick = task::sleep(std::time::Duration::from_millis(125)).fuse();
         futures::pin_mut!(tick);
         futures::select! {
-            connected = connect_future => return connected,
+            connected = connect_future => {
+                spinner.clear()?;
+                return connected;
+            },
             () = tick => {
                 let (phase, detail) = match reconnect_role {
                     PersistentRole::Allocate => (
@@ -578,7 +583,7 @@ async fn connect_with_progress(
                     phase,
                     detail: Some(detail.clone()),
                 })?;
-                eprintln!("{} {detail}", style.status("Status:"));
+                spinner.update(&style.status("Status:"), &detail)?;
             }
         }
     }
@@ -591,6 +596,7 @@ async fn sleep_with_retry_status(
     error: &Error,
     retry_delay: u64,
 ) -> Result<()> {
+    let mut spinner = StatusLine::stderr();
     let phase = if is_expected_rendezvous_gap(error) {
         TunnelRuntimePhase::Waiting
     } else {
@@ -602,9 +608,12 @@ async fn sleep_with_retry_status(
             phase: phase.clone(),
             detail: Some(retry_hint.clone()),
         })?;
-        eprintln!("{} {retry_hint}", style.status("Status:"));
-        task::sleep(std::time::Duration::from_secs(1)).await;
+        for _ in 0..8 {
+            spinner.update(&style.status("Status:"), &retry_hint)?;
+            task::sleep(std::time::Duration::from_millis(125)).await;
+        }
     }
+    spinner.clear()?;
     Ok(())
 }
 

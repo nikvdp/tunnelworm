@@ -7,3 +7,4 @@ pub mod persistent_auth;
 pub mod session;
 pub mod self_update;
 pub mod spec;
+pub mod status_line;
