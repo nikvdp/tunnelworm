@@ -1,11 +1,12 @@
 use std::{
     env,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -245,7 +246,7 @@ pub fn list_named_tunnels() -> Result<()> {
     }
 
     for (state_path, state) in entries {
-        let running = if state_path.with_extension("lock").exists() {
+        let running = if persistent_worker_running(&state_path)? {
             "yes"
         } else {
             "no"
@@ -285,7 +286,7 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     println!(
         "  {} {}",
         style.label("running?:"),
-        if state_path.with_extension("lock").exists() {
+        if persistent_worker_running(&state_path)? {
             "yes"
         } else {
             "no"
@@ -481,6 +482,22 @@ fn list_saved_tunnels(cwd: &Path) -> Result<Vec<(PathBuf, PersistentState)>> {
     }
     entries.sort_by(|left, right| left.1.config.name.cmp(&right.1.config.name));
     Ok(entries)
+}
+
+fn persistent_worker_running(state_path: &Path) -> Result<bool> {
+    let lock_path = state_path.with_extension("lock");
+    if !lock_path.exists() {
+        return Ok(false);
+    }
+
+    let lock_file = File::options().read(true).write(true).open(&lock_path)?;
+    match lock_file.try_lock_exclusive() {
+        Ok(()) => {
+            lock_file.unlock()?;
+            Ok(false)
+        },
+        Err(_) => Ok(true),
+    }
 }
 
 pub fn load_state(path: &Path) -> Result<PersistentState> {
