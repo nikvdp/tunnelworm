@@ -12,25 +12,21 @@ Queue `local` or `remote` rules first, then start the session with either
 
 const FOWLD_AFTER_HELP: &str = "\
 Examples:
-  Terminal 1: allocate a code and ask the peer to expose its local web server on
-  port 7000:
+  Expose the peer's local service on port 22 through a listener on port 9097:
     fowld
-    {\"kind\":\"remote\",\"listen\":\"tcp:7000:interface=127.0.0.1\",\"connect\":\"tcp:127.0.0.1:9000\"}
+    {\"kind\":\"remote\",\"listen\":\"tcp:9097:interface=127.0.0.1\",\"connect\":\"tcp:127.0.0.1:22\"}
     {\"kind\":\"allocate-code\"}
 
-  Terminal 2: join with the printed code and allow the matching forward:
+  On the peer, join with the printed code and allow the matching forward:
     fowld
-    {\"kind\":\"local\",\"listen\":\"tcp:7000\",\"connect\":\"tcp:127.0.0.1:9000\"}
+    {\"kind\":\"local\",\"listen\":\"tcp:9097\",\"connect\":\"tcp:127.0.0.1:22\"}
     {\"kind\":\"set-code\",\"code\":\"7-cobalt-signal\"}
-
-  Close the active session:
-    {\"kind\":\"session-close\"}
 
 Events you should expect:
   - {\"kind\":\"welcome\",...}
   - {\"kind\":\"code-allocated\",\"code\":\"...\"}
   - {\"kind\":\"peer-connected\",...}
-  - {\"kind\":\"listening\",\"listen\":\"tcp:7000:interface=127.0.0.1\",\"connect\":\"tcp:127.0.0.1:9000\"}
+  - {\"kind\":\"listening\",\"listen\":\"tcp:9097:interface=127.0.0.1\",\"connect\":\"tcp:127.0.0.1:22\"}
   - {\"kind\":\"closed\"}
 
 Notes:

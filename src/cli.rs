@@ -25,16 +25,16 @@ corresponding `-R` on the peer and `-R` still needs a corresponding `-L`.";
 const FOWL_AFTER_HELP: &str = "\
 Examples:
   One-off forward, connector side allocates a code:
-    fowl --connect localhost:22
+    fowl --connect 22
 
   Matching one-off peer listens locally with that code:
-    fowl --listen 127.0.0.1:9000 7-cobalt-signal
+    fowl --listen 9000 7-cobalt-signal
 
   Named persistent tunnel, creator side bootstraps a saved tunnel:
-    fowl tunnel create office-ssh --connect localhost:22
+    fowl tunnel create office-ssh --connect 22
 
   Named persistent tunnel, peer side joins with the one-time invite:
-    fowl tunnel create laptop-ssh --listen 127.0.0.1:9000 --invite 7-cobalt-signal
+    fowl tunnel create laptop-ssh --listen 9000 --invite 7-cobalt-signal
 
   Start one saved tunnel endpoint later by name:
     fowl tunnel up office-ssh
@@ -58,8 +58,54 @@ Examples:
 Notes:
   - `--listen` always needs a complementary `--connect` on the peer.
   - `--connect` always needs a complementary `--listen` on the peer.
+  - Bare ports on `--listen` and `--connect` default to loopback.
   - `-L` always needs a corresponding `-R` on the peer.
   - `-R` always needs a corresponding `-L` on the peer.";
+
+const TUNNEL_CREATE_AFTER_HELP: &str = "\
+Examples:
+  Create the service side of a saved tunnel and print a one-time invite:
+    fowl tunnel create office-ssh --connect 22
+
+  Create the client side using the printed invite from the other machine:
+    fowl tunnel create laptop-ssh --listen 9097 --invite 7-cobalt-signal";
+
+const TUNNEL_AFTER_HELP: &str = "\
+Examples:
+  Create the service side of a saved tunnel:
+    fowl tunnel create office-ssh --connect 22
+
+  Start that saved tunnel later by name:
+    fowl tunnel up office-ssh";
+
+const TUNNEL_UP_AFTER_HELP: &str = "\
+Examples:
+  Start a saved tunnel endpoint by name:
+    fowl tunnel up laptop-ssh
+
+  Start a saved tunnel endpoint by explicit state file:
+    fowl tunnel up --state ./.fowl/laptop-ssh--abcd1234.json";
+
+const TUNNEL_LIST_AFTER_HELP: &str = "\
+Example:
+  List the saved tunnel endpoints available on this machine:
+    fowl tunnel list";
+
+const TUNNEL_STATUS_AFTER_HELP: &str = "\
+Examples:
+  Inspect a saved tunnel endpoint by name:
+    fowl tunnel status laptop-ssh
+
+  Inspect an explicit state file directly:
+    fowl tunnel status --state ./.fowl/laptop-ssh--abcd1234.json";
+
+const TUNNEL_DELETE_AFTER_HELP: &str = "\
+Examples:
+  Delete a saved tunnel endpoint by name:
+    fowl tunnel delete laptop-ssh
+
+  Delete an explicit state file directly:
+    fowl tunnel delete --state ./.fowl/laptop-ssh--abcd1234.json";
 
 #[derive(Debug, Clone)]
 pub struct FowlConfig {
@@ -171,14 +217,14 @@ pub struct ForwardArgs {
         long = "listen",
         visible_alias = "listen-to",
         value_name = "ADDR",
-        help = "Accept local TCP connections at port or bind_address:port"
+        help = "Accept local TCP connections at port or bind_address:port; a bare port listens on loopback"
     )]
     pub listen: Vec<String>,
     #[arg(
         long = "connect",
         visible_alias = "connect-on",
         value_name = "ADDR",
-        help = "Connect locally to host:port when the peer forwards traffic here"
+        help = "Connect locally to port or host:port when the peer forwards traffic here; a bare port connects to loopback"
     )]
     pub connect: Vec<String>,
 }
@@ -205,6 +251,7 @@ pub struct TopLevelArgs {
 
 #[derive(Debug, Clone, Args)]
 #[command(about = "Persistent tunnel lifecycle commands")]
+#[command(after_long_help = TUNNEL_AFTER_HELP)]
 pub struct TunnelArgs {
     #[command(subcommand)]
     pub command: TunnelCommand,
@@ -217,7 +264,7 @@ pub enum TunnelCommand {
     #[command(about = "Start one saved side of a persistent tunnel")]
     Up(TunnelUpArgs),
     #[command(about = "List saved persistent tunnel endpoints")]
-    List,
+    List(TunnelListArgs),
     #[command(about = "Inspect persistent tunnel state without starting the tunnel")]
     Status(TunnelStatusArgs),
     #[command(about = "Delete one saved persistent tunnel endpoint")]
@@ -226,6 +273,7 @@ pub enum TunnelCommand {
 
 #[derive(Debug, Clone, Args)]
 #[command(about = "Create one named side of a persistent tunnel")]
+#[command(after_long_help = TUNNEL_CREATE_AFTER_HELP)]
 pub struct TunnelCreateArgs {
     #[arg(value_name = "NAME", help = "Local name for this saved tunnel endpoint")]
     pub name: String,
@@ -239,6 +287,7 @@ pub struct TunnelCreateArgs {
 
 #[derive(Debug, Clone, Args)]
 #[command(about = "Start one saved side of a persistent tunnel")]
+#[command(after_long_help = TUNNEL_UP_AFTER_HELP)]
 pub struct TunnelUpArgs {
     #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to start")]
     pub name: Option<String>,
@@ -248,6 +297,7 @@ pub struct TunnelUpArgs {
 
 #[derive(Debug, Clone, Args)]
 #[command(about = "Inspect the stored state for one local tunnel participant")]
+#[command(after_long_help = TUNNEL_STATUS_AFTER_HELP)]
 pub struct TunnelStatusArgs {
     #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to inspect")]
     pub name: Option<String>,
@@ -256,7 +306,13 @@ pub struct TunnelStatusArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+#[command(about = "List saved persistent tunnel endpoints")]
+#[command(after_long_help = TUNNEL_LIST_AFTER_HELP)]
+pub struct TunnelListArgs {}
+
+#[derive(Debug, Clone, Args)]
 #[command(about = "Delete one saved persistent tunnel endpoint")]
+#[command(after_long_help = TUNNEL_DELETE_AFTER_HELP)]
 pub struct TunnelDeleteArgs {
     #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to delete")]
     pub name: Option<String>,
@@ -301,7 +357,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
                     name: args.name,
                     state: args.state,
                 })),
-                TunnelCommand::List => Ok(Self::TunnelList),
+                TunnelCommand::List(_) => Ok(Self::TunnelList),
                 TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
                     name: args.name,
                     state: args.state,
