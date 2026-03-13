@@ -123,18 +123,27 @@ fn help_bold(value: &str) -> String {
     stdout_style().label(value)
 }
 
+fn help_header(value: &str) -> String {
+    if std::io::stdout().is_terminal() {
+        format!("\x1b[1;4m{value}\x1b[0m")
+    } else {
+        value.to_string()
+    }
+}
+
 fn styled_top_level_long_about() -> StyledStr {
     StyledStr::from(format!(
-        "Create a TCP port forward between two terminals over a magic-wormhole session.\n\n{}:\n  {}  Create a one-off forward between two terminals\n  {}  Create one named persistent tunnel endpoint\n  {}      Start one saved tunnel endpoint by name\n\n{}:\n  {}         List saved tunnel endpoints\n  {}       Inspect one saved tunnel endpoint\n  {}       Remove one saved tunnel endpoint\n\n{}:\n  Use {} on one side and {} on the peer.\n  If you use {} or {} instead, they still need the opposite half on the peer.",
-        help_bold("Preferred workflows"),
+        "{}\n\n{}:\n  {}  Create a one-off forward between two terminals\n  {}  Create one named persistent tunnel endpoint\n  {}      Start one saved tunnel endpoint by name\n\n{}:\n  {}         List saved tunnel endpoints\n  {}       Inspect one saved tunnel endpoint\n  {}       Remove one saved tunnel endpoint\n\n{}:\n  Use {} on one side and {} on the peer.\n  If you use {} or {} instead, they still need the opposite half on the peer.",
+        help_bold("Create a TCP port forward between two terminals over a magic-wormhole session."),
+        help_header("Preferred workflows"),
         help_bold("tunnelworm ..."),
         help_bold("tunnelworm tunnel create ..."),
         help_bold("tunnelworm tunnel up ..."),
-        help_bold("Management"),
+        help_header("Management"),
         help_bold("tunnelworm tunnel list"),
         help_bold("tunnelworm tunnel status"),
         help_bold("tunnelworm tunnel delete"),
-        help_bold("Matching rules"),
+        help_header("Matching rules"),
         help_bold("--listen"),
         help_bold("--connect"),
         help_bold("-L"),
@@ -145,20 +154,20 @@ fn styled_top_level_long_about() -> StyledStr {
 fn styled_top_level_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
-        help_bold("Examples"),
+        help_header("Examples"),
         help_bold("One-off forward"),
         help_bold("Named persistent tunnel"),
         help_bold("Manage saved endpoints"),
         help_bold("Shell completion"),
         help_bold("SSH-style compatibility syntax"),
-        help_bold("Notes"),
+        help_header("Notes"),
     ))
 }
 
 fn styled_tunnel_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n\n  {}:\n    tunnelworm tunnel up office-ssh",
-        help_bold("Examples"),
+        help_header("Examples"),
         help_bold("Create the service side"),
         help_bold("Start that saved endpoint later"),
     ))
@@ -167,7 +176,7 @@ fn styled_tunnel_after_help() -> StyledStr {
 fn styled_tunnel_create_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n\n  {}:\n    tunnelworm tunnel create laptop-ssh --listen 9097 --code 7-cobalt-signal",
-        help_bold("Examples"),
+        help_header("Examples"),
         help_bold("Create the service side and print a bootstrap code"),
         help_bold("Create the peer side using that printed code"),
     ))
@@ -176,7 +185,7 @@ fn styled_tunnel_create_after_help() -> StyledStr {
 fn styled_tunnel_up_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm tunnel up laptop-ssh\n\n  {}:\n    tunnelworm tunnel up --state ./.tunnelworm/laptop-ssh--abcd1234.json",
-        help_bold("Examples"),
+        help_header("Examples"),
         help_bold("Start a saved endpoint by name"),
         help_bold("Start a saved endpoint by explicit state file"),
     ))
@@ -185,7 +194,7 @@ fn styled_tunnel_up_after_help() -> StyledStr {
 fn styled_tunnel_list_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm tunnel list",
-        help_bold("Example"),
+        help_header("Example"),
         help_bold("List the saved tunnel endpoints on this machine"),
     ))
 }
@@ -193,7 +202,7 @@ fn styled_tunnel_list_after_help() -> StyledStr {
 fn styled_tunnel_status_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm tunnel status laptop-ssh\n\n  {}:\n    tunnelworm tunnel status --state ./.tunnelworm/laptop-ssh--abcd1234.json",
-        help_bold("Examples"),
+        help_header("Examples"),
         help_bold("Inspect a saved endpoint by name"),
         help_bold("Inspect an explicit state file directly"),
     ))
@@ -202,7 +211,7 @@ fn styled_tunnel_status_after_help() -> StyledStr {
 fn styled_tunnel_delete_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm tunnel delete laptop-ssh\n\n  {}:\n    tunnelworm tunnel delete --state ./.tunnelworm/laptop-ssh--abcd1234.json",
-        help_bold("Examples"),
+        help_header("Examples"),
         help_bold("Delete a saved endpoint by name"),
         help_bold("Delete an explicit state file directly"),
     ))
@@ -211,7 +220,7 @@ fn styled_tunnel_delete_after_help() -> StyledStr {
 fn styled_completion_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm completion bash > ~/.local/share/bash-completion/completions/tunnelworm",
-        help_bold("Examples"),
+        help_header("Examples"),
         help_bold("Print a zsh completion script"),
         help_bold("Save a bash completion script locally"),
     ))
