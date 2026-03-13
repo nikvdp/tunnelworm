@@ -260,6 +260,12 @@ pub struct TopLevelArgs {
     pub code: Option<String>,
 }
 
+#[derive(Debug, Clone, Args, Default)]
+pub struct CompletionTopLevelArgs {
+    #[command(flatten)]
+    pub common: CommonSessionArgs,
+}
+
 #[derive(Debug, Clone, Args)]
 #[command(about = "Persistent tunnel lifecycle commands")]
 #[command(after_long_help = TUNNEL_AFTER_HELP)]
@@ -337,12 +343,28 @@ pub struct TunnelDeleteArgs {
 #[command(long_about = FOWL_LONG_ABOUT)]
 #[command(after_long_help = FOWL_AFTER_HELP)]
 #[command(version)]
+#[command(args_conflicts_with_subcommands = true)]
 #[command(subcommand_precedence_over_arg = true)]
 pub struct FowlCli {
     #[command(subcommand)]
     pub command: Option<FowlSubcommand>,
     #[command(flatten)]
     pub top_level: TopLevelArgs,
+}
+
+#[derive(Debug, Parser)]
+#[command(name = "fowl")]
+#[command(about = "Create a TCP forward over a magic-wormhole session")]
+#[command(long_about = FOWL_LONG_ABOUT)]
+#[command(after_long_help = FOWL_AFTER_HELP)]
+#[command(version)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(subcommand_precedence_over_arg = true)]
+pub struct FowlCompletionCli {
+    #[command(subcommand)]
+    pub command: Option<FowlSubcommand>,
+    #[command(flatten)]
+    pub top_level: CompletionTopLevelArgs,
 }
 
 #[derive(Debug, Clone, Subcommand)]

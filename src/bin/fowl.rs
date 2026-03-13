@@ -3,7 +3,7 @@ use clap_complete::generate;
 use std::io::{self, ErrorKind, Write};
 
 use fowl_rs::{
-    cli::{stderr_style, FowlCli, FowlInvocation},
+    cli::{stderr_style, FowlCli, FowlCompletionCli, FowlInvocation},
     persistent,
 };
 
@@ -21,11 +21,15 @@ async fn main() {
     let result = match invocation {
         FowlInvocation::Run(config) => fowl_rs::session::run_fowl(config).await,
         FowlInvocation::Completion(shell) => {
-            let mut command = FowlCli::command();
+            let mut command = FowlCompletionCli::command();
             let name = command.get_name().to_string();
             let mut output = Vec::new();
             generate(shell, &mut command, name, &mut output);
-            if let Err(error) = io::stdout().write_all(&output) {
+            let mut output = String::from_utf8(output).expect("completion output must be valid utf-8");
+            if matches!(shell, clap_complete::Shell::Zsh) {
+                output = output.replace("compdef _fowl fowl", "compdef _fowl fowl -p '*/fowl'");
+            }
+            if let Err(error) = io::stdout().write_all(output.as_bytes()) {
                 if error.kind() == ErrorKind::BrokenPipe {
                     Ok(())
                 } else {
