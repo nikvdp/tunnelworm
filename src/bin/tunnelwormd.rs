@@ -1,4 +1,5 @@
 use clap::{CommandFactory, FromArgMatches, Parser};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use tunnelworm::daemon::runtime::DaemonConfig;
