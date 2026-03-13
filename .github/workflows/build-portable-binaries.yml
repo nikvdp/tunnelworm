@@ -136,8 +136,13 @@ jobs:
           merge-multiple: true
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-assets/*
-          fail_on_unmatched_files: true
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --clobber
+          else
+            gh release create "$tag" release-assets/* --generate-notes
+          fi
