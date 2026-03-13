@@ -34,7 +34,7 @@ Examples:
     fowl tunnel create office-ssh --connect 22
 
   Named persistent tunnel, peer side joins with the one-time invite:
-    fowl tunnel create laptop-ssh --listen 9000 --invite 7-cobalt-signal
+    fowl tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal
 
   Start one saved tunnel endpoint later by name:
     fowl tunnel up office-ssh
@@ -68,7 +68,7 @@ Examples:
     fowl tunnel create office-ssh --connect 22
 
   Create the client side using the printed invite from the other machine:
-    fowl tunnel create laptop-ssh --listen 9097 --invite 7-cobalt-signal";
+    fowl tunnel create laptop-ssh --listen 9097 --code 7-cobalt-signal";
 
 const TUNNEL_AFTER_HELP: &str = "\
 Examples:
@@ -279,8 +279,8 @@ pub struct TunnelCreateArgs {
     pub name: String,
     #[command(flatten)]
     pub common: CommonSessionArgs,
-    #[arg(long = "invite", value_name = "CODE", help = "Join an existing bootstrap invite instead of allocating a new one")]
-    pub invite: Option<String>,
+    #[arg(long = "code", value_name = "CODE", help = "Join an existing bootstrap code instead of allocating a new one")]
+    pub code: Option<String>,
     #[arg(long = "overwrite", help = "Replace an existing saved tunnel endpoint with the same local name")]
     pub overwrite: bool,
 }
@@ -347,7 +347,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
             Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
                 TunnelCommand::Create(args) => Ok(Self::TunnelCreate(build_config(
                     args.common,
-                    args.invite,
+                    args.code,
                     None,
                     args.overwrite,
                     false,
@@ -545,7 +545,7 @@ impl FowlConfig {
                         .unwrap_or_else(|| "PORT".into())
                 );
                 if self.code.is_some() {
-                    Some(format!("{base} --invite {code} --overwrite"))
+                    Some(format!("{base} --code {code} --overwrite"))
                 } else {
                     Some(format!("{base} --overwrite"))
                 }

@@ -656,14 +656,14 @@ fn print_tunnel_intro(
         match config.local_half() {
             crate::cli::ForwardHalf::Listen => {
                 println!(
-                    "  {} fowl tunnel create PEER_NAME --connect HOST:PORT --invite {}",
+                    "  {} fowl tunnel create PEER_NAME --connect HOST:PORT --code {}",
                     style.label("preferred:"),
                     code
                 );
             },
             crate::cli::ForwardHalf::Connect => {
                 println!(
-                    "  {} fowl tunnel create PEER_NAME --listen LISTEN_HOST:LISTEN_PORT --invite {}",
+                    "  {} fowl tunnel create PEER_NAME --listen LISTEN_HOST:LISTEN_PORT --code {}",
                     style.label("preferred:"),
                     code
                 );
