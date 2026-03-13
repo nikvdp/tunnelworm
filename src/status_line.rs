@@ -40,7 +40,7 @@ impl StatusLine {
             let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let frame = frames[self.frame % frames.len()];
             self.frame = self.frame.wrapping_add(1);
-            self.write_raw(&format!("\r\x1b[2K{prefix} [{frame}] {message}"))?;
+            self.write_raw(&format!("\r\x1b[2K{prefix} {message} {frame}"))?;
             return self.flush();
         }
 

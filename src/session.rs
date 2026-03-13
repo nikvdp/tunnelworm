@@ -15,6 +15,7 @@ use crate::{
     forward::{self, CliIntent, ForwardEvent},
     persistent::PersistentState,
     persistent_auth,
+    status_line::StatusLine,
 };
 
 #[derive(Debug, Clone)]
@@ -170,19 +171,23 @@ async fn connect_with_progress(
         "connecting to the peer...".to_string()
     };
 
-    println!("{} {}", style.status("Status:"), waiting_message);
+    let mut status_line = StatusLine::stdout();
+    status_line.update(&style.status("Status:"), &waiting_message)?;
 
     let connect_future = prepared.connect().fuse();
     futures::pin_mut!(connect_future);
 
     loop {
-        let tick = task::sleep(Duration::from_secs(1)).fuse();
+        let tick = task::sleep(Duration::from_millis(125)).fuse();
         futures::pin_mut!(tick);
 
         futures::select! {
-            connected = connect_future => return connected,
+            connected = connect_future => {
+                status_line.clear()?;
+                return connected;
+            },
             () = tick => {
-                println!("{} {}", style.status("Status:"), waiting_message);
+                status_line.update(&style.status("Status:"), &waiting_message)?;
             }
         }
     }
