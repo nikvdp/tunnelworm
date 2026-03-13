@@ -8,6 +8,7 @@ pub mod pipe;
 pub mod persistent;
 pub mod persistent_auth;
 pub mod session;
+pub mod shell;
 pub mod self_update;
 pub mod spec;
 pub mod status_line;

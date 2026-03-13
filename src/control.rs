@@ -14,6 +14,7 @@ use crate::{
     error::{Error, Result},
     pipe::PipeMode,
     persistent::{TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
+    shell::ShellOpen,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +23,7 @@ pub enum ControlRequest {
     Probe {},
     Echo { payload: String },
     Pipe { mode: PipeMode },
+    Shell { open: ShellOpen },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +53,10 @@ pub enum RuntimeControlRequest {
     },
     Pipe {
         mode: PipeMode,
+        stream: async_std::os::unix::net::UnixStream,
+    },
+    Shell {
+        open: ShellOpen,
         stream: async_std::os::unix::net::UnixStream,
     },
 }
@@ -180,6 +186,15 @@ async fn handle_stream(
                 .await
                 .map_err(|_| {
                     Error::Session("the local tunnel runtime is not accepting pipe requests".into())
+                })?;
+            return Ok(());
+        },
+        Ok(ControlRequest::Shell { open }) => {
+            requests
+                .send(RuntimeControlRequest::Shell { open, stream })
+                .await
+                .map_err(|_| {
+                    Error::Session("the local tunnel runtime is not accepting shell requests".into())
                 })?;
             return Ok(());
         },

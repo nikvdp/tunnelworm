@@ -20,6 +20,7 @@ use crate::{
     pipe::PipeMode,
     persistent::{PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
     session::{self, SessionOptions},
+    shell::{ShellOpen, ShellPacket, bridge_local_shell_stream, run_remote_shell, send_channel_packet, write_stream_packet},
     status_line::StatusLine,
 };
 
@@ -273,9 +274,22 @@ async fn handle_incoming_channel(
                 },
             }
         },
-        ChannelKind::Shell => Err(Error::NotImplemented(
-            "incoming pipe or shell channels are not wired yet",
-        )),
+        ChannelKind::Shell => {
+            let open: ShellOpen = serde_json::from_slice(&incoming.open_payload)?;
+            task::spawn(async move {
+                if let Err(error) = run_remote_shell(incoming.channel.clone(), open).await {
+                    let _ = send_channel_packet(
+                        &incoming.channel,
+                        &ShellPacket::Error {
+                            message: error.to_string(),
+                        },
+                    )
+                    .await;
+                    let _ = incoming.channel.close().await;
+                }
+            });
+            Ok(())
+        },
     }
 }
 
@@ -532,6 +546,39 @@ async fn handle_runtime_control_request(
                             ));
                         },
                     }
+                },
+            }
+        },
+        RuntimeControlRequest::Shell { open, stream } => {
+            let Some(session) = session else {
+                let mut stream = stream;
+                write_stream_packet(
+                    &mut stream,
+                    &ShellPacket::Error {
+                        message: "the tunnel is not connected yet".into(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            };
+            match session
+                .open_channel(ChannelKind::Shell, serde_json::to_vec(&open)?)
+                .await
+            {
+                Ok(channel) => {
+                    task::spawn(async move {
+                        let _ = bridge_local_shell_stream(stream, channel).await;
+                    });
+                },
+                Err(error) => {
+                    let mut stream = stream;
+                    write_stream_packet(
+                        &mut stream,
+                        &ShellPacket::Error {
+                            message: error.to_string(),
+                        },
+                    )
+                    .await?;
                 },
             }
         },
