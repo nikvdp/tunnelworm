@@ -141,8 +141,8 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" release-assets/* --clobber
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$tag" release-assets/* --generate-notes
+            gh release create "$tag" release-assets/* --generate-notes --repo "$GITHUB_REPOSITORY"
           fi
