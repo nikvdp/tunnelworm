@@ -420,8 +420,9 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                     connect_host,
                     connect_port,
                 } => {
-                    let detail =
-                        format!("{listen_host}:{listen_port} -> {connect_host}:{connect_port}");
+                    let detail = format!(
+                        "local {listen_host}:{listen_port} -> peer {connect_host}:{connect_port}"
+                    );
                     let _ = runtime_status_ref.write(TunnelRuntimeStatus {
                         phase: TunnelRuntimePhase::Up,
                         detail: Some(detail.clone()),

@@ -245,7 +245,6 @@ pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
     print_tunnel_intro(&style, "Persistent reuse:", &state.config.code, &replay_config);
     print_state_block(&style, &replay_config, &state_path, &state.config.code);
     println!();
-    println!("{} handing off to the persistent worker...", style.status("Status:"));
     exec_persistent_daemon(&state_path)
 }
 
