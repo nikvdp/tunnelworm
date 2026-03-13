@@ -1,4 +1,3 @@
-use clap::CommandFactory;
 use clap_complete::generate;
 use std::io::{self, ErrorKind, Write};
 
