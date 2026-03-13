@@ -3,8 +3,11 @@ use magic_wormhole::{
     forwarding,
     transit::{self, RelayHint},
 };
+use async_std::task;
+use futures::FutureExt;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::time::Duration;
 
 use crate::{
     cli::{stdout_style, FowlConfig},
@@ -157,6 +160,34 @@ impl PreparedSession {
     }
 }
 
+async fn connect_with_progress(
+    prepared: PreparedSession,
+    style: &crate::cli::AnsiStyle,
+) -> Result<ConnectedSession> {
+    let waiting_message = if prepared.code_was_allocated {
+        format!("waiting for the peer to join code {}...", prepared.code)
+    } else {
+        "connecting to the peer...".to_string()
+    };
+
+    println!("{} {}", style.status("Status:"), waiting_message);
+
+    let connect_future = prepared.connect().fuse();
+    futures::pin_mut!(connect_future);
+
+    loop {
+        let tick = task::sleep(Duration::from_secs(1)).fuse();
+        futures::pin_mut!(tick);
+
+        futures::select! {
+            connected = connect_future => return connected,
+            () = tick => {
+                println!("{} {}", style.status("Status:"), waiting_message);
+            }
+        }
+    }
+}
+
 pub async fn authenticate_persistent_peer(
     session: &mut ConnectedSession,
     state: &mut PersistentState,
@@ -169,7 +200,7 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
     let prepared = prepare_session(SessionOptions::from(&config)).await?;
     if prepared.code_was_allocated || config.code.is_some() {
         let mode = if prepared.code_was_allocated {
-            "One-off code:"
+            "One-off create:"
         } else {
             "One-off join:"
         };
@@ -186,14 +217,12 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
         println!("  {} {}", style.label("ssh-style:"), ssh_style);
     }
     println!();
-    println!("{} waiting for peer...", style.status("Status:"));
     if let Some(welcome) = &prepared.welcome {
         println!("{} {welcome}", style.label("Mailbox:"));
     }
-    let mut session = prepared.connect().await?;
+    let mut session = connect_with_progress(prepared, &style).await?;
     println!("{} peer connected", style.status("Status:"));
     println!("{} {}", style.label("Verifier:"), session.verifier);
-    println!("{} {}", style.label("Peer version:"), session.peer_version);
 
     let intent = CliIntent::from(&config);
     let peer_intent = forward::exchange_cli_intents(&mut session.wormhole, &intent).await?;

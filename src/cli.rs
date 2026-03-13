@@ -243,8 +243,6 @@ pub struct CommonSessionArgs {
 pub struct TopLevelArgs {
     #[command(flatten)]
     pub common: CommonSessionArgs,
-    #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
-    pub state: Option<PathBuf>,
     #[arg(help = "Existing wormhole code to join; omit it to allocate a new code")]
     pub code: Option<String>,
 }
@@ -370,7 +368,7 @@ impl TryFrom<FowlCli> for FowlInvocation {
             None => Ok(Self::Run(build_config(
                 value.top_level.common,
                 value.top_level.code,
-                value.top_level.state,
+                None,
                 false,
                 false,
                 None,
