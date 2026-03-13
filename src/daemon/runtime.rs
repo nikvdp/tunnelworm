@@ -4,7 +4,7 @@ use fs2::FileExt;
 use futures::{FutureExt, select};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
 };
@@ -14,7 +14,7 @@ use crate::{
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
-    persistent::{PersistentRole, load_state},
+    persistent::{PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
     session::{self, SessionOptions},
 };
 
@@ -361,6 +361,7 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
 
 pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     let _lock = acquire_persistent_state_lock(&_state_path)?;
+    let runtime_status = PersistentRuntimeStatus::new(&_state_path)?;
     let mut state = load_state(&_state_path)?;
     if state.peer_public_key_hex.is_none() {
         return Err(Error::PersistentState(
@@ -374,9 +375,17 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
         remotes: state.config.remotes.clone(),
     };
     let mut retry_delay = 1u64;
+    runtime_status.write(TunnelRuntimeStatus {
+        phase: TunnelRuntimePhase::Starting,
+        detail: Some("persistent worker is starting".into()),
+    })?;
 
     loop {
         let result: Result<()> = async {
+            runtime_status.write(TunnelRuntimeStatus {
+                phase: TunnelRuntimePhase::Starting,
+                detail: Some("connecting to the peer".into()),
+            })?;
             let reconnect_role = reconnect_role(&state);
             let prepared = session::prepare_session(SessionOptions {
                 mailbox: state.config.mailbox.clone(),
@@ -393,11 +402,16 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             let mut connected = prepared.connect().await?;
             eprintln!("{} peer connected", style.status("Status:"));
             eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
+            runtime_status.write(TunnelRuntimeStatus {
+                phase: TunnelRuntimePhase::Up,
+                detail: Some(format!("peer connected; verifier {}", connected.verifier)),
+            })?;
             session::authenticate_persistent_peer(&mut connected, &mut state).await?;
 
             let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, &intent).await?;
             let plan = forward::build_cli_plan(&intent, &peer_intent)?;
             let (_cancel_tx, cancel_rx) = async_channel::bounded(1);
+            let runtime_status_ref = &runtime_status;
             forward::run_forwarding(connected, plan, cancel_rx, |event| match event {
                 ForwardEvent::Listening {
                     name,
@@ -406,10 +420,14 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                     connect_host,
                     connect_port,
                 } => {
-                    eprintln!(
-                        "{} {name} on {listen_host}:{listen_port} -> {connect_host}:{connect_port}",
-                        style.status("Listening:"),
+                    let detail = format!(
+                        "{name} on {listen_host}:{listen_port} -> {connect_host}:{connect_port}"
                     );
+                    let _ = runtime_status_ref.write(TunnelRuntimeStatus {
+                        phase: TunnelRuntimePhase::Up,
+                        detail: Some(detail.clone()),
+                    });
+                    eprintln!("{} {detail}", style.status("Listening:"));
                 },
             })
             .await
@@ -419,11 +437,24 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
         match result {
             Ok(()) => {
                 retry_delay = 1;
+                runtime_status.write(TunnelRuntimeStatus {
+                    phase: TunnelRuntimePhase::Waiting,
+                    detail: Some("session ended; reconnecting".into()),
+                })?;
                 eprintln!("{} session ended; reconnecting...", style.status("Status:"));
             },
             Err(error) if is_hard_persistent_failure(&error) => return Err(error),
             Err(error) => {
                 let retry_hint = persistent_retry_message(&state.config.code, &error, retry_delay);
+                let phase = if is_expected_rendezvous_gap(&error) {
+                    TunnelRuntimePhase::Waiting
+                } else {
+                    TunnelRuntimePhase::Retrying
+                };
+                runtime_status.write(TunnelRuntimeStatus {
+                    phase,
+                    detail: Some(retry_hint.clone()),
+                })?;
                 eprintln!("{} {retry_hint}", style.status("Status:"));
                 task::sleep(std::time::Duration::from_secs(retry_delay)).await;
                 retry_delay = next_retry_delay(&error, retry_delay);
@@ -501,5 +532,31 @@ fn is_transit_disconnect(error: &Error) -> bool {
     match error {
         Error::Wormhole(wormhole) => wormhole.to_string().contains("Transit error"),
         other => other.to_string().contains("Transit error"),
+    }
+}
+
+struct PersistentRuntimeStatus {
+    path: PathBuf,
+}
+
+impl PersistentRuntimeStatus {
+    fn new(state_path: &Path) -> Result<Self> {
+        let path = runtime_status_path(state_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Ok(Self { path })
+    }
+
+    fn write(&self, status: TunnelRuntimeStatus) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(&status)?;
+        fs::write(&self.path, bytes)?;
+        Ok(())
+    }
+}
+
+impl Drop for PersistentRuntimeStatus {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }

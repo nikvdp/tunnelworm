@@ -50,6 +50,21 @@ pub struct PersistentState {
     pub peer_public_key_hex: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TunnelRuntimePhase {
+    Starting,
+    Waiting,
+    Up,
+    Retrying,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelRuntimeStatus {
+    pub phase: TunnelRuntimePhase,
+    pub detail: Option<String>,
+}
+
 impl PersistentState {
     pub fn new(config: PersistentConfig, local_identity: PersistentKeyMaterial) -> Self {
         Self {
@@ -246,16 +261,15 @@ pub fn list_named_tunnels() -> Result<()> {
     }
 
     for (state_path, state) in entries {
-        let running = if persistent_worker_running(&state_path)? {
-            "yes"
-        } else {
-            "no"
-        };
+        let runtime = current_tunnel_runtime(&state_path)?;
         println!();
         println!("  {}", style.label(&state.config.name));
         println!("    {} {}", style.label("role:"), local_forward_role_label(&state.config));
         println!("    {} {}", style.label("endpoint:"), local_endpoint_label(&state.config));
-        println!("    {} {}", style.label("running?:"), running);
+        println!("    {} {}", style.label("state:"), runtime.label());
+        if let Some(detail) = runtime.detail() {
+            println!("    {} {}", style.label("detail:"), detail);
+        }
         println!("    {} {}", style.label("file:"), state_path.display());
     }
 
@@ -285,13 +299,12 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     println!("  {} {}", style.label("endpoint:"), local_endpoint_label(&state.config));
     println!(
         "  {} {}",
-        style.label("running?:"),
-        if persistent_worker_running(&state_path)? {
-            "yes"
-        } else {
-            "no"
-        }
+        style.label("state:"),
+        current_tunnel_runtime(&state_path)?.label()
     );
+    if let Some(detail) = current_tunnel_runtime(&state_path)?.detail() {
+        println!("  {} {}", style.label("detail:"), detail);
+    }
     println!(
         "  {} {}",
         style.label("mailbox:"),
@@ -484,6 +497,23 @@ fn list_saved_tunnels(cwd: &Path) -> Result<Vec<(PathBuf, PersistentState)>> {
     Ok(entries)
 }
 
+pub fn runtime_status_path(state_path: &Path) -> PathBuf {
+    state_path.with_extension("runtime.json")
+}
+
+fn current_tunnel_runtime(state_path: &Path) -> Result<ResolvedTunnelRuntime> {
+    if !persistent_worker_running(state_path)? {
+        return Ok(ResolvedTunnelRuntime::Stopped);
+    }
+
+    let runtime_path = runtime_status_path(state_path);
+    let status = load_runtime_status(&runtime_path).unwrap_or(TunnelRuntimeStatus {
+        phase: TunnelRuntimePhase::Starting,
+        detail: Some("persistent worker is starting".into()),
+    });
+    Ok(ResolvedTunnelRuntime::Live(status))
+}
+
 fn persistent_worker_running(state_path: &Path) -> Result<bool> {
     let lock_path = state_path.with_extension("lock");
     if !lock_path.exists() {
@@ -497,6 +527,48 @@ fn persistent_worker_running(state_path: &Path) -> Result<bool> {
             Ok(false)
         },
         Err(_) => Ok(true),
+    }
+}
+
+fn load_runtime_status(path: &Path) -> Result<TunnelRuntimeStatus> {
+    let bytes = fs::read(path)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+#[derive(Debug, Clone)]
+enum ResolvedTunnelRuntime {
+    Stopped,
+    Live(TunnelRuntimeStatus),
+}
+
+impl ResolvedTunnelRuntime {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Live(TunnelRuntimeStatus {
+                phase: TunnelRuntimePhase::Starting,
+                ..
+            }) => "starting",
+            Self::Live(TunnelRuntimeStatus {
+                phase: TunnelRuntimePhase::Waiting,
+                ..
+            }) => "waiting",
+            Self::Live(TunnelRuntimeStatus {
+                phase: TunnelRuntimePhase::Up,
+                ..
+            }) => "up",
+            Self::Live(TunnelRuntimeStatus {
+                phase: TunnelRuntimePhase::Retrying,
+                ..
+            }) => "retrying",
+        }
+    }
+
+    fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Stopped => None,
+            Self::Live(status) => status.detail.as_deref(),
+        }
     }
 }
 
