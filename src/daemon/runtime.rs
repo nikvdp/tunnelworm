@@ -1797,7 +1797,11 @@ fn print_temporary_intro(
         PersistentRole::Allocate => "One-off create:",
         PersistentRole::Join => "One-off join:",
     };
-    eprintln!("{} {}", style.heading(heading), style.code(&state.config.code));
+    eprintln!(
+        "{} {}",
+        style.heading(heading),
+        style.code(&state.config.code)
+    );
     eprintln!("{} {}", style.heading("Local tunnel:"), state.config.name);
     eprintln!(
         "{} {}",
