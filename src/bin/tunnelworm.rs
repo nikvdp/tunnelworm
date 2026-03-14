@@ -14,7 +14,8 @@ use tunnelworm::{
 #[async_std::main]
 async fn main() {
     let raw_args: Vec<OsString> = env::args_os().collect();
-    if let Some((typed, suggested, help_command)) = probable_top_level_subcommand_typo(&raw_args[1..])
+    if let Some((typed, suggested, help_command)) =
+        probable_top_level_subcommand_typo(&raw_args[1..])
     {
         eprintln!("error: unrecognized subcommand '{typed}'");
         eprintln!();
@@ -146,7 +147,10 @@ fn matching_help_command(args: &[OsString]) -> clap::Command {
     command
 }
 
-fn best_matching_subcommand(command: &clap::Command, token: &str) -> Option<(String, clap::Command)> {
+fn best_matching_subcommand(
+    command: &clap::Command,
+    token: &str,
+) -> Option<(String, clap::Command)> {
     let mut best: Option<(usize, clap::Command)> = None;
     let mut best_name: Option<String> = None;
     for subcommand in command.get_subcommands() {
@@ -205,9 +209,10 @@ fn probable_top_level_subcommand_typo(
     }
 
     let command = tunnelworm_command();
-    if command.get_subcommands().any(|sub| {
-        sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token)
-    }) {
+    if command
+        .get_subcommands()
+        .any(|sub| sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token))
+    {
         return None;
     }
 
