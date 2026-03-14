@@ -12,6 +12,7 @@ use async_std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    control::ControlRequest,
     error::{Error, Result},
     mux::MuxChannel,
 };
@@ -29,6 +30,18 @@ pub enum FileTransferPacket {
     Done,
     Success { path: String, bytes: u64 },
     Error { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTransferResult {
+    pub path: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalFileTransferSource {
+    pub open: FileTransferOpen,
+    pub bytes: u64,
 }
 
 pub async fn bridge_local_file_stream(stream: UnixStream, channel: MuxChannel) -> Result<()> {
@@ -115,6 +128,92 @@ pub async fn run_remote_receive(
             },
         }
     }
+}
+
+pub async fn run_local_send(
+    mut stream: UnixStream,
+    source_path: &Path,
+    open: FileTransferOpen,
+    total_bytes: u64,
+    mut on_progress: impl FnMut(u64, u64) -> Result<()>,
+) -> Result<FileTransferResult> {
+    let request = serde_json::to_string(&ControlRequest::SendFile { open })?;
+    stream.write_all(request.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    stream.flush().await?;
+
+    let mut source_file = async_std::fs::File::open(source_path).await?;
+    let mut buffer = vec![0u8; 16 * 1024];
+    let mut sent_bytes = 0u64;
+    loop {
+        let read = source_file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        write_stream_packet(
+            &mut stream,
+            &FileTransferPacket::Chunk {
+                data: buffer[..read].to_vec(),
+            },
+        )
+        .await?;
+        sent_bytes += read as u64;
+        on_progress(sent_bytes, total_bytes)?;
+    }
+    write_stream_packet(&mut stream, &FileTransferPacket::Done).await?;
+    on_progress(total_bytes, total_bytes)?;
+
+    loop {
+        match read_stream_packet(&mut stream).await? {
+            Some(FileTransferPacket::Success { path, bytes }) => {
+                return Ok(FileTransferResult { path, bytes });
+            },
+            Some(FileTransferPacket::Error { message }) => return Err(Error::Session(message)),
+            Some(FileTransferPacket::Chunk { .. }) | Some(FileTransferPacket::Done) => {
+                return Err(Error::Session(
+                    "received unexpected file transfer data after the local send finished".into(),
+                ));
+            },
+            None => {
+                return Err(Error::Session(
+                    "the file transfer ended before the peer confirmed the write".into(),
+                ));
+            },
+        }
+    }
+}
+
+pub fn prepare_local_source(
+    path: &Path,
+    destination_path: Option<String>,
+    overwrite: bool,
+) -> Result<LocalFileTransferSource> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        Error::Session(format!(
+            "could not read the local source file at {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(Error::Usage(format!(
+            "source path {} is not a regular file",
+            path.display()
+        )));
+    }
+    let source_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| Error::Usage(format!("source path {} has no basename", path.display())))?;
+
+    Ok(LocalFileTransferSource {
+        open: FileTransferOpen {
+            source_name: source_name.to_string(),
+            destination_path,
+            overwrite,
+        },
+        bytes: metadata.len(),
+    })
 }
 
 fn resolve_destination_path(base_dir: &Path, open: &FileTransferOpen) -> Result<PathBuf> {

@@ -46,6 +46,7 @@ async fn main() {
         },
         TunnelwormInvocation::SelfUpdate => tunnelworm::self_update::run_self_update(),
         TunnelwormInvocation::Pipe(config) => persistent::run_named_pipe(&config).await,
+        TunnelwormInvocation::SendFile(config) => persistent::run_named_send_file(&config).await,
         TunnelwormInvocation::Shell(config) => match persistent::run_named_shell(&config).await {
             Ok(code) => {
                 shell_exit_code = Some(code);

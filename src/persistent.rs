@@ -12,9 +12,10 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
+    cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
     control::{ControlResponse, control_socket_path, probe_runtime},
     error::{Error, Result},
+    file_transfer,
     pipe,
     persistent_auth,
     shell::{self, ShellOpen},
@@ -397,6 +398,86 @@ pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
     stream.write_all(b"\n").await?;
     stream.flush().await?;
     shell::run_local_shell_client(stream).await
+}
+
+pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let (state_path, state) = resolve_named_state(None, Some(&config.name), &cwd)?;
+    let source_path = if config.source.is_absolute() {
+        config.source.clone()
+    } else {
+        cwd.join(&config.source)
+    };
+    let prepared = file_transfer::prepare_local_source(
+        &source_path,
+        config
+            .destination
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        config.overwrite,
+    )?;
+    let stream = async_std::os::unix::net::UnixStream::connect(control_socket_path(&state_path))
+        .await
+        .map_err(|error| {
+            Error::Session(format!(
+                "could not connect to the local tunnel control socket: {error}"
+            ))
+        })?;
+    let style = stdout_style();
+    let mut status = StatusLine::stdout();
+    let source_label = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let result = file_transfer::run_local_send(
+        stream,
+        &source_path,
+        prepared.open,
+        prepared.bytes,
+        |sent, total| {
+            let percent = if total == 0 {
+                100usize
+            } else {
+                ((sent.saturating_mul(100)) / total) as usize
+            };
+            let filled = if total == 0 {
+                24usize
+            } else {
+                ((sent.saturating_mul(24)) / total) as usize
+            };
+            let bar = format!(
+                "{}{}",
+                "█".repeat(filled.min(24)),
+                "·".repeat(24usize.saturating_sub(filled.min(24)))
+            );
+            let message = format!(
+                "sending {source_label} [{}] {:>3}% ({}/{})",
+                bar,
+                percent.min(100),
+                human_bytes(sent),
+                human_bytes(total)
+            );
+            status.update(&style.status("Status:"), &message)?;
+            Ok(())
+        },
+    )
+    .await;
+    status.clear()?;
+    let result = result?;
+    println!(
+        "{} {} -> {} ({})",
+        style.heading("Sent:"),
+        source_path.display(),
+        result.path,
+        human_bytes(result.bytes)
+    );
+    println!(
+        "{} {}",
+        style.label("Tunnel:"),
+        state.config.name
+    );
+    Ok(())
 }
 
 fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option<(PathBuf, PersistentState)>> {
@@ -915,4 +996,19 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit_index = 0usize;
+    while value >= 1024.0 && unit_index < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit_index += 1;
+    }
+    if unit_index == 0 {
+        format!("{bytes} {}", UNITS[unit_index])
+    } else {
+        format!("{value:.1} {}", UNITS[unit_index])
+    }
 }

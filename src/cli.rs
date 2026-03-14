@@ -19,6 +19,7 @@ Top-level `tunnelworm ...` is the one-off path.
 `tunnelworm tunnel up ...` starts a saved persistent tunnel by name.
 `tunnelworm tunnel list`, `status`, and `delete` manage saved tunnel endpoints.
 `tunnelworm pipe <name>` streams stdin/stdout over one live named tunnel.
+`tunnelworm send-file <name> ...` sends one file over a live named tunnel.
 `tunnelworm self-update` refreshes the installed binaries from GitHub releases.
 
 One side provides `--listen` and the peer provides `--connect`.
@@ -47,6 +48,9 @@ Examples:
 
   Stream stdin over a live named tunnel:
     echo hello | tunnelworm pipe office-ssh
+
+  Send one file over a live named tunnel:
+    tunnelworm send-file office-ssh ./report.txt
 
   Open the remote login shell over a live named tunnel:
     tunnelworm shell office-ssh
@@ -135,6 +139,22 @@ Notes:
   If stdout is redirected and stdin is still a terminal, tunnelworm receives.
   If both stdin and stdout are redirected, pass --send or --receive explicitly.";
 
+const SEND_FILE_AFTER_HELP: &str = "\
+Examples:
+  Send one file and keep its basename on the peer:
+    tunnelworm send-file office-ssh ./report.txt
+
+  Send one file to an explicit path on the peer:
+    tunnelworm send-file office-ssh ./report.txt /tmp/inbox/report.txt
+
+  Replace an existing destination file on the peer:
+    tunnelworm send-file office-ssh ./report.txt /tmp/inbox/report.txt --overwrite
+
+Notes:
+  The peer writes into its tunnel process working directory unless you pass a remote path.
+  Existing destination files are rejected unless you pass --overwrite.
+  `send` is a shorthand alias for `send-file`.";
+
 const SHELL_AFTER_HELP: &str = "\
 Examples:
   Open an interactive shell on the remote end of one live named tunnel:
@@ -196,11 +216,12 @@ fn styled_top_level_long_about() -> StyledStr {
 
 fn styled_top_level_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    echo hello | tunnelworm pipe office-ssh\n\n  {}:\n    tunnelworm shell office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm self-update\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `tunnelworm pipe` infers send or receive from stdio unless both ends are redirected.\n  - Without `--command`, `tunnelworm shell` starts the remote login shell.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
+        "{}:\n  {}:\n    tunnelworm --connect 22\n    tunnelworm --listen 9000 7-cobalt-signal\n\n  {}:\n    tunnelworm tunnel create office-ssh --connect 22\n    tunnelworm tunnel create laptop-ssh --listen 9000 --code 7-cobalt-signal\n    tunnelworm tunnel up office-ssh\n\n  {}:\n    echo hello | tunnelworm pipe office-ssh\n\n  {}:\n    tunnelworm send-file office-ssh ./report.txt\n\n  {}:\n    tunnelworm shell office-ssh\n\n  {}:\n    tunnelworm tunnel status office-ssh\n    tunnelworm tunnel list\n    tunnelworm tunnel delete office-ssh\n\n  {}:\n    tunnelworm completion zsh\n\n  {}:\n    tunnelworm self-update\n\n  {}:\n    tunnelworm -R 9000:localhost:22\n    tunnelworm -L 9000:localhost:22 7-cobalt-signal\n\n{}:\n  - `--listen` always needs a complementary `--connect` on the peer.\n  - `--connect` always needs a complementary `--listen` on the peer.\n  - Bare ports on `--listen` and `--connect` default to loopback.\n  - `tunnelworm pipe` infers send or receive from stdio unless both ends are redirected.\n  - `tunnelworm send-file` writes into the peer's working directory unless you pass a remote path.\n  - Without `--command`, `tunnelworm shell` starts the remote login shell.\n  - `-L` always needs a corresponding `-R` on the peer.\n  - `-R` always needs a corresponding `-L` on the peer.",
         help_header("Examples"),
         help_bold("One-off forward"),
         help_bold("Named persistent tunnel"),
         help_bold("Pipe over a live named tunnel"),
+        help_bold("Send one file over a live named tunnel"),
         help_bold("Shell over a live named tunnel"),
         help_bold("Manage saved endpoints"),
         help_bold("Shell completion"),
@@ -273,6 +294,17 @@ fn styled_pipe_after_help() -> StyledStr {
     ))
 }
 
+fn styled_send_file_after_help() -> StyledStr {
+    StyledStr::from(format!(
+        "{}:\n  {}:\n    tunnelworm send-file office-ssh ./report.txt\n\n  {}:\n    tunnelworm send-file office-ssh ./report.txt /tmp/inbox/report.txt\n\n  {}:\n    tunnelworm send-file office-ssh ./report.txt /tmp/inbox/report.txt --overwrite\n\n{}:\n  - The peer writes into its tunnel process working directory unless you pass a remote path.\n  - Existing destination files are rejected unless you pass `--overwrite`.\n  - `send` is a shorthand alias for `send-file`.",
+        help_header("Examples"),
+        help_bold("Send one file and keep its basename on the peer"),
+        help_bold("Send one file to an explicit path on the peer"),
+        help_bold("Replace an existing destination file on the peer"),
+        help_header("Notes"),
+    ))
+}
+
 fn styled_shell_after_help() -> StyledStr {
     StyledStr::from(format!(
         "{}:\n  {}:\n    tunnelworm shell office-ssh\n\n  {}:\n    tunnelworm shell office-ssh --command 'pwd'\n\n{}:\n  - Without `--command`, tunnelworm starts the remote login shell.\n  - `--command` runs one remote command and returns its exit code locally.",
@@ -328,6 +360,9 @@ pub fn tunnelworm_command() -> Command {
                 })
         })
         .mut_subcommand("pipe", |sub| sub.after_long_help(styled_pipe_after_help()))
+        .mut_subcommand("send-file", |sub| {
+            sub.after_long_help(styled_send_file_after_help())
+        })
         .mut_subcommand("shell", |sub| sub.after_long_help(styled_shell_after_help()))
 }
 
@@ -358,6 +393,9 @@ pub fn tunnelworm_completion_command() -> Command {
                 })
         })
         .mut_subcommand("pipe", |sub| sub.after_long_help(styled_pipe_after_help()))
+        .mut_subcommand("send-file", |sub| {
+            sub.after_long_help(styled_send_file_after_help())
+        })
         .mut_subcommand("shell", |sub| sub.after_long_help(styled_shell_after_help()))
 }
 
@@ -411,11 +449,20 @@ pub struct TunnelShellConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct TunnelSendFileConfig {
+    pub name: String,
+    pub source: PathBuf,
+    pub destination: Option<PathBuf>,
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum TunnelwormInvocation {
     Run(FowlConfig),
     Completion(Shell),
     SelfUpdate,
     Pipe(TunnelPipeConfig),
+    SendFile(TunnelSendFileConfig),
     Shell(TunnelShellConfig),
     TunnelCreate(FowlConfig),
     TunnelUp(TunnelUpConfig),
@@ -616,6 +663,20 @@ pub struct TunnelPipeArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+#[command(about = "Send one file over one live named tunnel")]
+#[command(after_long_help = SEND_FILE_AFTER_HELP)]
+pub struct TunnelSendFileArgs {
+    #[arg(value_name = "NAME", help = "Local name of the saved tunnel endpoint to use")]
+    pub name: String,
+    #[arg(value_name = "SOURCE", help = "Local file to send to the peer")]
+    pub source: PathBuf,
+    #[arg(value_name = "REMOTE_DEST", help = "Optional destination path to write on the peer")]
+    pub destination: Option<PathBuf>,
+    #[arg(long = "overwrite", help = "Replace an existing destination file on the peer")]
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone, Args)]
 #[command(about = "Open the remote login shell, or run one remote command, over one live named tunnel")]
 #[command(after_long_help = SHELL_AFTER_HELP)]
 pub struct TunnelShellArgs {
@@ -662,6 +723,8 @@ pub enum FowlSubcommand {
     Completion(CompletionArgs),
     SelfUpdate(SelfUpdateArgs),
     Pipe(TunnelPipeArgs),
+    #[command(alias = "send")]
+    SendFile(TunnelSendFileArgs),
     Shell(TunnelShellArgs),
     Tunnel(TunnelArgs),
 }
@@ -696,6 +759,12 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                 } else {
                     None
                 },
+            })),
+            Some(FowlSubcommand::SendFile(args)) => Ok(Self::SendFile(TunnelSendFileConfig {
+                name: args.name,
+                source: args.source,
+                destination: args.destination,
+                overwrite: args.overwrite,
             })),
             Some(FowlSubcommand::Shell(args)) => Ok(Self::Shell(TunnelShellConfig {
                 name: args.name,
