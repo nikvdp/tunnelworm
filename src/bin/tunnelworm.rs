@@ -1,15 +1,26 @@
 use clap_complete::generate;
+use std::env;
 use std::io::{self, ErrorKind, Write};
 
 use tunnelworm::{
     cli::{
-        parse_tunnelworm_cli, stderr_style, tunnelworm_completion_command, TunnelwormInvocation,
+        parse_tunnelworm_cli, stderr_style, tunnelworm_command, tunnelworm_completion_command,
+        TunnelwormInvocation,
     },
     persistent,
 };
 
 #[async_std::main]
 async fn main() {
+    if env::args_os().nth(1).is_none() {
+        let mut command = tunnelworm_command();
+        command
+            .print_long_help()
+            .expect("top-level help should render");
+        println!();
+        return;
+    }
+
     let args = parse_tunnelworm_cli();
     let invocation = match TunnelwormInvocation::try_from(args) {
         Ok(invocation) => invocation,
