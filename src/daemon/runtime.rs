@@ -10,7 +10,7 @@ use futures::{FutureExt, select};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -1628,7 +1628,7 @@ async fn run_temporary_tunnel(
     intent: &forward::CliIntent,
     shared: &RuntimeShared,
 ) -> Result<()> {
-    let interrupt = install_interrupt_notifier()?;
+    let shutdown = install_temporary_shutdown_notifier()?;
     let role = state.config.role;
     let prepared = session::prepare_session(SessionOptions {
         mailbox: state.config.mailbox.clone(),
@@ -1658,7 +1658,7 @@ async fn run_temporary_tunnel(
         &shared.runtime_status,
         role,
         &state.config.code,
-        Some(interrupt.clone()),
+        Some(shutdown.clone()),
     )
     .await?
     else {
@@ -1672,7 +1672,7 @@ async fn run_temporary_tunnel(
     })?;
 
     let Some(peer_intent) = interruptible(
-        interrupt.clone(),
+        shutdown.clone(),
         forward::exchange_cli_intents(&mut connected.wormhole, intent),
     )
     .await?
@@ -1701,7 +1701,7 @@ async fn run_temporary_tunnel(
     }
 
     let Some(transport) =
-        interruptible(interrupt.clone(), MuxTransport::connect(connected, role)).await?
+        interruptible(shutdown.clone(), MuxTransport::connect(connected, role)).await?
     else {
         return Ok(());
     };
@@ -1763,11 +1763,11 @@ async fn run_temporary_tunnel(
     }
 
     let transport_wait = transport.wait_for_close().fuse();
-    let interrupt_wait = interrupt.recv().fuse();
-    futures::pin_mut!(transport_wait, interrupt_wait);
+    let shutdown_wait = shutdown.recv().fuse();
+    futures::pin_mut!(transport_wait, shutdown_wait);
     let result = futures::select! {
         result = transport_wait => result,
-        _ = interrupt_wait => Ok(()),
+        _ = shutdown_wait => Ok(()),
     };
 
     let _ = listener_cancel_tx.send(()).await;
@@ -1973,6 +1973,55 @@ fn install_interrupt_notifier() -> Result<async_channel::Receiver<()>> {
     })?;
     Ok(rx)
 }
+
+fn install_temporary_shutdown_notifier() -> Result<async_channel::Receiver<()>> {
+    let interrupt = install_interrupt_notifier()?;
+    let (tx, rx) = async_channel::bounded(1);
+
+    let interrupt_tx = tx.clone();
+    task::spawn(async move {
+        let _ = interrupt.recv().await;
+        let _ = interrupt_tx.send(()).await;
+    });
+
+    install_owner_shutdown_notifier(tx.clone());
+
+    Ok(rx)
+}
+
+#[cfg(unix)]
+fn install_owner_shutdown_notifier(tx: async_channel::Sender<()>) {
+    use std::os::fd::FromRawFd;
+
+    let Some(fd) = std::env::var("TUNNELWORM_OWNER_FD")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+    else {
+        return;
+    };
+
+    std::thread::spawn(move || {
+        let mut stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+        let mut byte = [0u8; 1];
+        loop {
+            match stream.read(&mut byte) {
+                Ok(0) => {
+                    let _ = tx.send_blocking(());
+                    break;
+                }
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    let _ = tx.send_blocking(());
+                    break;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn install_owner_shutdown_notifier(_tx: async_channel::Sender<()>) {}
 
 fn protocol_error_message(error: &Error) -> String {
     match error {

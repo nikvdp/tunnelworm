@@ -1016,6 +1016,18 @@ fn resolve_named_state(
             )),
             other => other,
         })?;
+        if state.config.temporary
+            && matches!(
+                current_tunnel_runtime(path)?,
+                ResolvedTunnelRuntime::Stopped
+            )
+        {
+            remove_state_artifacts(path);
+            return Err(Error::PersistentState(format!(
+                "temporary tunnel state at {} is no longer live and has been cleaned up",
+                path.display()
+            )));
+        }
         return Ok((path.to_path_buf(), state));
     }
 
@@ -1184,6 +1196,15 @@ fn list_saved_tunnels(cwd: &Path) -> Result<Vec<(PathBuf, PersistentState)>> {
             let Ok(state) = load_state(&path) else {
                 continue;
             };
+            if state.config.temporary
+                && matches!(
+                    current_tunnel_runtime(&path)?,
+                    ResolvedTunnelRuntime::Stopped
+                )
+            {
+                remove_state_artifacts(&path);
+                continue;
+            }
             entries.push((path, state));
         }
     }
@@ -1533,10 +1554,25 @@ fn run_temporary_daemon(state_path: &Path, interrupt: async_channel::Receiver<()
     }
 
     let daemon_path = persistent_daemon_path()?;
-    let mut child = Command::new(&daemon_path)
-        .arg("--persistent-state")
-        .arg(state_path)
-        .spawn()?;
+    let mut command = Command::new(&daemon_path);
+    command.arg("--persistent-state").arg(state_path);
+    #[cfg(unix)]
+    let _owner_guard = {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (owner_reader, owner_writer) = UnixStream::pair()?;
+        clear_cloexec(owner_reader.as_raw_fd())?;
+        set_cloexec(owner_writer.as_raw_fd())?;
+        command.env("TUNNELWORM_OWNER_FD", owner_reader.as_raw_fd().to_string());
+        Some((owner_reader, owner_writer))
+    };
+    let mut child = command.spawn()?;
+    #[cfg(unix)]
+    let _owner_guard = _owner_guard.map(|(owner_reader, owner_writer)| {
+        drop(owner_reader);
+        owner_writer
+    });
     let mut interrupted_at: Option<Instant> = None;
     let mut forwarded_kill = false;
 
@@ -1566,6 +1602,32 @@ fn run_temporary_daemon(state_path: &Path, interrupt: async_channel::Receiver<()
 
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[cfg(unix)]
+fn clear_cloexec(fd: std::os::fd::RawFd) -> Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(Error::Io(std::io::Error::last_os_error()));
+    }
+    let cleared = flags & !libc::FD_CLOEXEC;
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, cleared) } < 0 {
+        return Err(Error::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_cloexec(fd: std::os::fd::RawFd) -> Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(Error::Io(std::io::Error::last_os_error()));
+    }
+    let updated = flags | libc::FD_CLOEXEC;
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, updated) } < 0 {
+        return Err(Error::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
 }
 
 fn persistent_daemon_path() -> Result<PathBuf> {

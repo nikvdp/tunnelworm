@@ -32,6 +32,7 @@ flate2 = "1"
 fs2 = "0.4"
 futures = "0.3"
 hex = "0.4"
+libc = "0.2"
 magic-wormhole = { git = "https://github.com/magic-wormhole/magic-wormhole.rs", rev = "72149d844ceee1d6a0c65e107d5339441a44c4d9", default-features = false, features = ["forwarding", "tls"] }
 portable-pty = "0.9"
 rand = "0.8"
