@@ -638,6 +638,56 @@ fn validate_managed_port_forward(forward: &ManagedPortForward) -> Result<()> {
     Ok(())
 }
 
+fn uses_compat_startup_forwards(state: &crate::persistent::PersistentState) -> bool {
+    state.config.ports.is_empty()
+        && (!state.config.locals.is_empty() || !state.config.remotes.is_empty())
+}
+
+fn managed_port_definition_from_listener(listener: &ListenerPlan) -> ManagedPortDefinition {
+    ManagedPortDefinition {
+        local_listen_host: Some(listener.listen_host.clone()),
+        local_listen_port: Some(listener.listen_port),
+        local_connect_host: None,
+        local_connect_port: None,
+        remote_listen_host: None,
+        remote_listen_port: None,
+        remote_connect_host: Some(listener.connect_host.clone()),
+        remote_connect_port: Some(listener.connect_port),
+    }
+}
+
+async fn maybe_seed_compat_managed_ports(
+    state_path: &Path,
+    state: &mut crate::persistent::PersistentState,
+    listeners: &[ListenerPlan],
+    session: &MuxSession,
+    port_broker: &Arc<PortForwardBroker>,
+    runtime_status: &PersistentRuntimeStatus,
+    style: &crate::cli::AnsiStyle,
+) -> Result<bool> {
+    if !uses_compat_startup_forwards(state) || listeners.is_empty() {
+        return Ok(false);
+    }
+
+    for listener in listeners {
+        add_managed_port_forward(
+            state_path,
+            session,
+            managed_port_definition_from_listener(listener),
+            port_broker,
+            runtime_status,
+            style,
+        )
+        .await?;
+    }
+
+    *state = load_state(state_path)?;
+    state.config.locals.clear();
+    state.config.remotes.clear();
+    save_state(state_path, state)?;
+    Ok(true)
+}
+
 fn listener_plan_from_managed_forward(forward: &ManagedPortForward) -> Option<ListenerPlan> {
     Some(ListenerPlan {
         name: format!("port-{}", forward.id),
@@ -805,12 +855,18 @@ async fn handle_remote_port_control(
             )?;
             validate_managed_port_forward(&forward)?;
             let mut state = load_state(state_path)?;
+            let migrating_compat_forward =
+                uses_compat_startup_forwards(&state) && state.config.ports.is_empty();
             if state.config.ports.iter().any(|existing| existing.id == forward.id) {
                 Err(Error::Session(format!(
                     "port forward {} already exists on the remote side",
                     forward.id
                 )))
             } else {
+                if migrating_compat_forward {
+                    state.config.locals.clear();
+                    state.config.remotes.clear();
+                }
                 state.config.ports.push(forward.clone());
                 save_state(state_path, &state)?;
                 activate_managed_port_forward(&forward, session, port_broker, runtime_status, style)
@@ -1424,7 +1480,11 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             *peer_policy.lock().expect("peer policy mutex poisoned") =
                 peer_intent.policy_rules.clone();
             let plan = forward::build_cli_plan(&intent, &peer_intent)?;
-            for target in &plan.targets {
+            let forward::ForwardPlan {
+                listeners: plan_listeners,
+                targets: plan_targets,
+            } = plan;
+            for target in &plan_targets {
                 let detail = format!(
                     "peer {}:{} -> local {}:{}",
                     target.listen_host, target.listen_port, target.connect_host, target.connect_port
@@ -1444,14 +1504,6 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 phase: TunnelRuntimePhase::Up,
                 detail: Some("peer connected; live tunnel ready".into()),
             })?;
-            restore_managed_port_forwards(
-                &_state_path,
-                &mux_session,
-                &port_broker,
-                &runtime_status,
-                &style,
-            )
-            .await?;
             let incoming_task = task::spawn(drive_incoming_channels(
                 mux_session.clone(),
                 pipe_broker.clone(),
@@ -1460,10 +1512,35 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 runtime_status.clone(),
                 style.clone(),
             ));
+            let compat_seeded = maybe_seed_compat_managed_ports(
+                &_state_path,
+                &mut state,
+                &plan_listeners,
+                &mux_session,
+                &port_broker,
+                &runtime_status,
+                &style,
+            )
+            .await?;
+            if !compat_seeded {
+                restore_managed_port_forwards(
+                    &_state_path,
+                    &mux_session,
+                    &port_broker,
+                    &runtime_status,
+                    &style,
+                )
+                .await?;
+            }
 
             let (listener_cancel_tx, listener_cancel_rx) = async_channel::bounded::<()>(1);
             let mut listener_tasks = Vec::new();
-            for listener in plan.listeners {
+            let startup_listeners = if compat_seeded {
+                Vec::new()
+            } else {
+                plan_listeners
+            };
+            for listener in startup_listeners {
                 listener_tasks.push(task::spawn(drive_listener(
                     listener,
                     mux_session.clone(),
@@ -1561,7 +1638,11 @@ async fn run_temporary_tunnel(
     *peer_policy.lock().expect("peer policy mutex poisoned") =
         peer_intent.policy_rules.clone();
     let plan = forward::build_cli_plan(intent, &peer_intent)?;
-    for target in &plan.targets {
+    let forward::ForwardPlan {
+        listeners: plan_listeners,
+        targets: plan_targets,
+    } = plan;
+    for target in &plan_targets {
         let detail = format!(
             "peer {}:{} -> local {}:{}",
             target.listen_host, target.listen_port, target.connect_host, target.connect_port
@@ -1582,14 +1663,6 @@ async fn run_temporary_tunnel(
         phase: TunnelRuntimePhase::Up,
         detail: Some("peer connected; live tunnel ready".into()),
     })?;
-    restore_managed_port_forwards(
-        state_path,
-        &mux_session,
-        &port_broker,
-        runtime_status,
-        style,
-    )
-    .await?;
     let incoming_task = task::spawn(drive_incoming_channels(
         mux_session.clone(),
         pipe_broker.clone(),
@@ -1598,10 +1671,35 @@ async fn run_temporary_tunnel(
         runtime_status.clone(),
         style.clone(),
     ));
+    let compat_seeded = maybe_seed_compat_managed_ports(
+        state_path,
+        state,
+        &plan_listeners,
+        &mux_session,
+        &port_broker,
+        runtime_status,
+        style,
+    )
+    .await?;
+    if !compat_seeded {
+        restore_managed_port_forwards(
+            state_path,
+            &mux_session,
+            &port_broker,
+            runtime_status,
+            style,
+        )
+        .await?;
+    }
 
     let (listener_cancel_tx, listener_cancel_rx) = async_channel::bounded::<()>(1);
     let mut listener_tasks = Vec::new();
-    for listener in plan.listeners {
+    let startup_listeners = if compat_seeded {
+        Vec::new()
+    } else {
+        plan_listeners
+    };
+    for listener in startup_listeners {
         listener_tasks.push(task::spawn(drive_listener(
             listener,
             mux_session.clone(),
