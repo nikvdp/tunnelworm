@@ -1749,7 +1749,6 @@ mod tests {
     use crate::persistent_auth;
     use async_std::{
         io::{ReadExt, WriteExt},
-        os::unix::net::UnixListener,
         task,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1907,18 +1906,12 @@ mod tests {
             )
             .expect("runtime status should save");
             let socket_path = control_socket_path(&path);
-            if let Some(parent) = socket_path.parent() {
-                fs::create_dir_all(parent).expect("control socket dir should exist");
-            }
-            if socket_path.exists() {
-                let _ = fs::remove_file(&socket_path);
-            }
-            let listener = task::block_on(UnixListener::bind(&socket_path))
-                .expect("control socket should bind");
+            let listener =
+                crate::local_control::bind_listener(&path).expect("control socket should bind");
             let tunnel_name = state.config.name.clone();
             let tunnel_code = state.config.code.clone();
             task::spawn(async move {
-                while let Ok((mut stream, _)) = listener.accept().await {
+                while let Ok(mut stream) = crate::local_control::accept(&listener).await {
                     let mut line = Vec::new();
                     loop {
                         let mut byte = [0u8; 1];

@@ -431,14 +431,22 @@ mod tests {
     use super::read_request_line;
     use async_std::{
         io::{ReadExt, WriteExt},
-        os::unix::net::UnixStream,
+        net::{TcpListener, TcpStream},
         task,
     };
 
     #[test]
     fn read_request_line_leaves_following_bytes_intact() {
         task::block_on(async {
-            let (mut client, mut server) = UnixStream::pair().expect("unix pair should open");
+            let listener = TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .expect("listener should bind");
+            let addr = listener.local_addr().expect("listener addr should resolve");
+            let client_fut = TcpStream::connect(addr);
+            let server_fut = listener.accept();
+            let (client_res, server_res) = futures::join!(client_fut, server_fut);
+            let mut client = client_res.expect("client should connect");
+            let (mut server, _) = server_res.expect("server should accept");
             let writer = task::spawn(async move {
                 client
                     .write_all(b"{\"kind\":\"send-file\"}\n\x00\x00\x00\x04ping")
