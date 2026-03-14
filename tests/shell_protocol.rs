@@ -14,8 +14,12 @@ fn shell_open_round_trips_through_json() {
 
 #[test]
 fn shell_packets_round_trip_through_bincode() {
-    let packet = ShellPacket::Resize { rows: 50, cols: 120 };
+    let packet = ShellPacket::Resize {
+        rows: 50,
+        cols: 120,
+    };
     let encoded = bincode::serialize(&packet).expect("shell packet should serialize");
-    let decoded: ShellPacket = bincode::deserialize(&encoded).expect("shell packet should deserialize");
+    let decoded: ShellPacket =
+        bincode::deserialize(&encoded).expect("shell packet should deserialize");
     assert_eq!(decoded, packet);
 }

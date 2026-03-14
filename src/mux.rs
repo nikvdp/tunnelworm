@@ -93,10 +93,7 @@ enum TransitMessage {
 }
 
 impl MuxTransport {
-    pub async fn connect(
-        mut connected: ConnectedSession,
-        role: PersistentRole,
-    ) -> Result<Self> {
+    pub async fn connect(mut connected: ConnectedSession, role: PersistentRole) -> Result<Self> {
         let our_version: &forwarding::AppVersion = connected
             .wormhole
             .our_version()
@@ -104,7 +101,9 @@ impl MuxTransport {
             .expect("tunnelworm only uses the forwarding app version today");
         let peer_version: forwarding::AppVersion =
             serde_json::from_value(connected.peer_version.clone()).map_err(|error| {
-                Error::Session(format!("could not parse the peer transit capabilities: {error}"))
+                Error::Session(format!(
+                    "could not parse the peer transit capabilities: {error}"
+                ))
             })?;
 
         let connector = transit::init(
@@ -127,8 +126,8 @@ impl MuxTransport {
             TransitMessage::Error { message } => {
                 return Err(Error::Session(format!(
                     "peer failed while setting up the live tunnel transport: {message}"
-                )))
-            },
+                )));
+            }
         };
 
         let transit_role = match role {
@@ -170,17 +169,22 @@ impl MuxTransport {
             let closed_flag = closed_flag.clone();
             task::spawn(async move {
                 pin_mut!(sink);
-                let result = async {
-                    while let Ok(frame) = outgoing_rx.recv().await {
-                        sink.send(frame.encode().into_boxed_slice())
-                            .await
-                            .map_err(|error| Error::Session(format!("live tunnel send failed: {error}")))?;
+                let result =
+                    async {
+                        while let Ok(frame) = outgoing_rx.recv().await {
+                            sink.send(frame.encode().into_boxed_slice()).await.map_err(
+                                |error| Error::Session(format!("live tunnel send failed: {error}")),
+                            )?;
+                        }
+                        Ok::<(), Error>(())
                     }
-                    Ok::<(), Error>(())
-                }
-                .await;
-                notify_closed(&closed_flag, &closed_tx, result.err().map(|error| error.to_string()))
                     .await;
+                notify_closed(
+                    &closed_flag,
+                    &closed_tx,
+                    result.err().map(|error| error.to_string()),
+                )
+                .await;
             });
         }
 
@@ -192,8 +196,9 @@ impl MuxTransport {
                 pin_mut!(stream);
                 let result = async {
                     while let Some(record) = stream.next().await {
-                        let record = record
-                            .map_err(|error| Error::Session(format!("live tunnel receive failed: {error}")))?;
+                        let record = record.map_err(|error| {
+                            Error::Session(format!("live tunnel receive failed: {error}"))
+                        })?;
                         let frame = WireFrame::decode(&record)?;
                         match frame {
                             WireFrame::Open {
@@ -221,11 +226,15 @@ impl MuxTransport {
                                     .await
                                     .map_err(|_| {
                                         Error::Session(
-                                            "live tunnel incoming channel receiver shut down".into(),
+                                            "live tunnel incoming channel receiver shut down"
+                                                .into(),
                                         )
                                     })?;
-                            },
-                            WireFrame::Data { channel_id, payload } => {
+                            }
+                            WireFrame::Data {
+                                channel_id,
+                                payload,
+                            } => {
                                 let maybe_tx = inner
                                     .channels
                                     .lock()
@@ -235,7 +244,7 @@ impl MuxTransport {
                                 if let Some(tx) = maybe_tx {
                                     let _ = tx.send(ChannelEvent::Data(payload)).await;
                                 }
-                            },
+                            }
                             WireFrame::Close { channel_id } => {
                                 let maybe_tx = inner
                                     .channels
@@ -245,7 +254,7 @@ impl MuxTransport {
                                 if let Some(tx) = maybe_tx {
                                     let _ = tx.send(ChannelEvent::Closed).await;
                                 }
-                            },
+                            }
                         }
                     }
                     Ok::<(), Error>(())
@@ -254,9 +263,10 @@ impl MuxTransport {
                 notify_closed(
                     &closed_flag,
                     &closed_tx,
-                    result.err().map(|error| error.to_string()).or_else(|| {
-                        Some("live tunnel transport ended".into())
-                    }),
+                    result
+                        .err()
+                        .map(|error| error.to_string())
+                        .or_else(|| Some("live tunnel transport ended".into())),
                 )
                 .await;
             });
@@ -381,28 +391,31 @@ impl WireFrame {
                 bytes.extend_from_slice(&(open_payload.len() as u32).to_be_bytes());
                 bytes.extend_from_slice(&open_payload);
                 bytes
-            },
-            Self::Data { channel_id, payload } => {
+            }
+            Self::Data {
+                channel_id,
+                payload,
+            } => {
                 let mut bytes = Vec::with_capacity(1 + 8 + 4 + payload.len());
                 bytes.push(1);
                 bytes.extend_from_slice(&channel_id.to_be_bytes());
                 bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
                 bytes.extend_from_slice(&payload);
                 bytes
-            },
+            }
             Self::Close { channel_id } => {
                 let mut bytes = Vec::with_capacity(1 + 8);
                 bytes.push(2);
                 bytes.extend_from_slice(&channel_id.to_be_bytes());
                 bytes
-            },
+            }
         }
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        let tag = *bytes.first().ok_or_else(|| {
-            Error::Session("received an empty live tunnel frame".into())
-        })?;
+        let tag = *bytes
+            .first()
+            .ok_or_else(|| Error::Session("received an empty live tunnel frame".into()))?;
         match tag {
             0 => {
                 let channel_id = read_u64(bytes, 1)?;
@@ -412,27 +425,26 @@ impl WireFrame {
                 let payload_len = read_u32(bytes, 10)? as usize;
                 let payload = bytes
                     .get(14..14 + payload_len)
-                    .ok_or_else(|| {
-                        Error::Session("open frame payload is truncated".into())
-                    })?
+                    .ok_or_else(|| Error::Session("open frame payload is truncated".into()))?
                     .to_vec();
                 Ok(Self::Open {
                     channel_id,
                     kind,
                     open_payload: payload,
                 })
-            },
+            }
             1 => {
                 let channel_id = read_u64(bytes, 1)?;
                 let payload_len = read_u32(bytes, 9)? as usize;
                 let payload = bytes
                     .get(13..13 + payload_len)
-                    .ok_or_else(|| {
-                        Error::Session("data frame payload is truncated".into())
-                    })?
+                    .ok_or_else(|| Error::Session("data frame payload is truncated".into()))?
                     .to_vec();
-                Ok(Self::Data { channel_id, payload })
-            },
+                Ok(Self::Data {
+                    channel_id,
+                    payload,
+                })
+            }
             2 => Ok(Self::Close {
                 channel_id: read_u64(bytes, 1)?,
             }),
@@ -508,7 +520,7 @@ mod tests {
                 assert_eq!(channel_id, 7);
                 assert_eq!(kind, ChannelKind::Pipe);
                 assert_eq!(open_payload, b"hello");
-            },
+            }
             other => panic!("decoded the wrong frame: {other:?}"),
         }
     }
@@ -522,10 +534,13 @@ mod tests {
         let encoded = frame.clone().encode();
         let decoded = WireFrame::decode(&encoded).expect("frame should decode");
         match decoded {
-            WireFrame::Data { channel_id, payload } => {
+            WireFrame::Data {
+                channel_id,
+                payload,
+            } => {
                 assert_eq!(channel_id, 42);
                 assert_eq!(payload, vec![1, 2, 3, 4]);
-            },
+            }
             other => panic!("decoded the wrong frame: {other:?}"),
         }
     }

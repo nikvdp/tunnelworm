@@ -99,7 +99,7 @@ pub async fn run_pipe(state_path: &std::path::Path, mode: PipeMode) -> Result<()
             });
             send_task.await?;
             recv_task.await?;
-        },
+        }
         PipeMode::Receive => loop {
             let mut buffer = vec![0u8; 16 * 1024];
             let read = reader.read(&mut buffer).await?;

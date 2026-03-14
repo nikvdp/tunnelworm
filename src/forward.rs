@@ -1,7 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    net::IpAddr,
-};
+use std::{collections::BTreeSet, net::IpAddr};
 
 use async_channel::Receiver;
 use magic_wormhole::{Wormhole, forwarding};
@@ -82,7 +79,11 @@ impl From<&TunnelConfig> for CliIntent {
     }
 }
 
-fn choose_one<'a, T>(kind: &str, name: &str, values: Vec<(Side, &'a T)>) -> Result<Option<(Side, &'a T)>> {
+fn choose_one<'a, T>(
+    kind: &str,
+    name: &str,
+    values: Vec<(Side, &'a T)>,
+) -> Result<Option<(Side, &'a T)>> {
     match values.as_slice() {
         [] => Ok(None),
         [single] => Ok(Some(*single)),
@@ -92,7 +93,10 @@ fn choose_one<'a, T>(kind: &str, name: &str, values: Vec<(Side, &'a T)>) -> Resu
     }
 }
 
-pub async fn exchange_cli_intents(wormhole: &mut Wormhole, intent: &CliIntent) -> Result<CliIntent> {
+pub async fn exchange_cli_intents(
+    wormhole: &mut Wormhole,
+    intent: &CliIntent,
+) -> Result<CliIntent> {
     wormhole.send_json(intent).await?;
     let peer = wormhole.receive_json().await??;
     Ok(peer)
@@ -154,7 +158,7 @@ pub fn build_cli_plan(here: &CliIntent, there: &CliIntent) -> Result<ForwardPlan
                 return Err(Error::Usage(format!(
                     "service {name:?} declares both local and remote on the same side, which is unsupported"
                 )));
-            },
+            }
             (Some((local_side, _)), Some(_)) => local_side,
             (Some((local_side, _)), None) => local_side,
             (None, Some((remote_side, _))) => remote_side.other(),
@@ -227,10 +231,9 @@ fn parse_bind_address(host: &str) -> Result<IpAddr> {
 }
 
 fn target_host(host: &str) -> Result<Option<url::Host>> {
-    Ok(Some(
-        url::Host::parse(host)
-            .map_err(|error| Error::Usage(format!("invalid connect host {host:?}: {error}")))?,
-    ))
+    Ok(Some(url::Host::parse(host).map_err(|error| {
+        Error::Usage(format!("invalid connect host {host:?}: {error}"))
+    })?))
 }
 
 pub async fn run_forwarding<F>(
@@ -262,7 +265,10 @@ where
     }
 
     let bind_address = {
-        let mut hosts = plan.listeners.iter().map(|listener| listener.listen_host.as_str());
+        let mut hosts = plan
+            .listeners
+            .iter()
+            .map(|listener| listener.listen_host.as_str());
         let first = hosts
             .next()
             .ok_or_else(|| Error::Usage("listener mode needs at least one listener".into()))?;
@@ -274,7 +280,11 @@ where
         parse_bind_address(first)?
     };
 
-    let custom_ports: Vec<u16> = plan.listeners.iter().map(|listener| listener.listen_port).collect();
+    let custom_ports: Vec<u16> = plan
+        .listeners
+        .iter()
+        .map(|listener| listener.listen_port)
+        .collect();
     let offer = forwarding::connect(
         session.wormhole,
         |_| {},

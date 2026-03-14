@@ -1,9 +1,5 @@
-use async_std::{
-    io::prelude::*,
-    os::unix::net::UnixListener,
-    task,
-};
 use async_channel::Sender;
+use async_std::{io::prelude::*, os::unix::net::UnixListener, task};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -13,8 +9,11 @@ use std::{
 use crate::{
     error::{Error, Result},
     file_transfer::FileTransferOpen,
+    persistent::{
+        ManagedPortDefinition, ManagedPortForward, TunnelRuntimePhase, TunnelRuntimeStatus,
+        load_state, runtime_status_path,
+    },
     pipe::PipeMode,
-    persistent::{ManagedPortDefinition, ManagedPortForward, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
     shell::ShellOpen,
 };
 
@@ -133,8 +132,8 @@ pub fn probe_runtime(state_path: &Path) -> Result<Option<ControlResponse>> {
             return Err(Error::PersistentState(format!(
                 "could not connect to the local tunnel control socket at {}: {error}",
                 socket_path.display()
-            )))
-        },
+            )));
+        }
     };
     let mut request = serde_json::to_vec(&ControlRequest::Probe {})?;
     request.push(b'\n');
@@ -169,8 +168,8 @@ pub async fn echo_runtime(state_path: &Path, payload: &str) -> Result<Option<Str
             return Err(Error::PersistentState(format!(
                 "could not connect to the local tunnel control socket at {}: {error}",
                 socket_path.display()
-            )))
-        },
+            )));
+        }
     };
     let mut request = serde_json::to_vec(&ControlRequest::Echo {
         payload: payload.to_string(),
@@ -187,7 +186,9 @@ pub async fn echo_runtime(state_path: &Path, payload: &str) -> Result<Option<Str
     match serde_json::from_str::<ControlResponse>(&line)? {
         ControlResponse::Echo { payload } => Ok(Some(payload)),
         ControlResponse::Error { message } => Err(Error::Session(message)),
-        ControlResponse::Probe { .. } | ControlResponse::PortsAdded { .. } | ControlResponse::PortsRemoved { .. } => Err(Error::Session(
+        ControlResponse::Probe { .. }
+        | ControlResponse::PortsAdded { .. }
+        | ControlResponse::PortsRemoved { .. } => Err(Error::Session(
             "received an unexpected probe response while checking tunnel readiness".into(),
         )),
     }
@@ -209,8 +210,8 @@ pub async fn add_port_forward_runtime(
             return Err(Error::PersistentState(format!(
                 "could not connect to the local tunnel control socket at {}: {error}",
                 socket_path.display()
-            )))
-        },
+            )));
+        }
     };
     let mut request = serde_json::to_vec(&ControlRequest::PortsAdd {
         definition: definition.clone(),
@@ -247,8 +248,8 @@ pub async fn remove_port_forward_runtime(state_path: &Path, id: u32) -> Result<O
             return Err(Error::PersistentState(format!(
                 "could not connect to the local tunnel control socket at {}: {error}",
                 socket_path.display()
-            )))
-        },
+            )));
+        }
     };
     let mut request = serde_json::to_vec(&ControlRequest::PortsRemove { id })?;
     request.push(b'\n');
@@ -280,7 +281,10 @@ fn is_stale_control_socket(error: &std::io::Error) -> bool {
 pub fn control_socket_path(state_path: &Path) -> PathBuf {
     std::env::temp_dir()
         .join("tunnelworm-control")
-        .join(format!("{:016x}.sock", fnv1a64(state_path.to_string_lossy().as_bytes())))
+        .join(format!(
+            "{:016x}.sock",
+            fnv1a64(state_path.to_string_lossy().as_bytes())
+        ))
 }
 
 async fn handle_stream(
@@ -294,50 +298,61 @@ async fn handle_stream(
     }
 
     let response = match serde_json::from_str::<ControlRequest>(&line) {
-        Ok(ControlRequest::Probe {}) => round_trip_runtime_request(
-            requests,
-            |reply| RuntimeControlRequest::Probe { reply },
-            || {
-                let state = load_state(state_path)?;
-                Ok(ControlResponse::Probe {
-                    tunnel_name: state.config.name,
-                    code: state.config.code,
-                    runtime: current_runtime(state_path)?,
-                    peer_policy_rules: Vec::new(),
-                })
-            },
-        )
-        .await,
-        Ok(ControlRequest::Echo { payload }) => round_trip_runtime_request(
-            requests,
-            move |reply| RuntimeControlRequest::Echo { payload, reply },
-            || {
-                Err(Error::PersistentState(
-                    "the local tunnel runtime is not accepting live control requests yet".into(),
-                ))
-            },
-        )
-        .await,
-        Ok(ControlRequest::PortsAdd { definition }) => round_trip_runtime_request(
-            requests,
-            move |reply| RuntimeControlRequest::PortsAdd { definition, reply },
-            || {
-                Err(Error::PersistentState(
-                    "the local tunnel runtime is not accepting port-management requests yet".into(),
-                ))
-            },
-        )
-        .await,
-        Ok(ControlRequest::PortsRemove { id }) => round_trip_runtime_request(
-            requests,
-            move |reply| RuntimeControlRequest::PortsRemove { id, reply },
-            || {
-                Err(Error::PersistentState(
-                    "the local tunnel runtime is not accepting port-management requests yet".into(),
-                ))
-            },
-        )
-        .await,
+        Ok(ControlRequest::Probe {}) => {
+            round_trip_runtime_request(
+                requests,
+                |reply| RuntimeControlRequest::Probe { reply },
+                || {
+                    let state = load_state(state_path)?;
+                    Ok(ControlResponse::Probe {
+                        tunnel_name: state.config.name,
+                        code: state.config.code,
+                        runtime: current_runtime(state_path)?,
+                        peer_policy_rules: Vec::new(),
+                    })
+                },
+            )
+            .await
+        }
+        Ok(ControlRequest::Echo { payload }) => {
+            round_trip_runtime_request(
+                requests,
+                move |reply| RuntimeControlRequest::Echo { payload, reply },
+                || {
+                    Err(Error::PersistentState(
+                        "the local tunnel runtime is not accepting live control requests yet"
+                            .into(),
+                    ))
+                },
+            )
+            .await
+        }
+        Ok(ControlRequest::PortsAdd { definition }) => {
+            round_trip_runtime_request(
+                requests,
+                move |reply| RuntimeControlRequest::PortsAdd { definition, reply },
+                || {
+                    Err(Error::PersistentState(
+                        "the local tunnel runtime is not accepting port-management requests yet"
+                            .into(),
+                    ))
+                },
+            )
+            .await
+        }
+        Ok(ControlRequest::PortsRemove { id }) => {
+            round_trip_runtime_request(
+                requests,
+                move |reply| RuntimeControlRequest::PortsRemove { id, reply },
+                || {
+                    Err(Error::PersistentState(
+                        "the local tunnel runtime is not accepting port-management requests yet"
+                            .into(),
+                    ))
+                },
+            )
+            .await
+        }
         Ok(ControlRequest::Pipe { mode }) => {
             requests
                 .send(RuntimeControlRequest::Pipe { mode, stream })
@@ -346,16 +361,18 @@ async fn handle_stream(
                     Error::Session("the local tunnel runtime is not accepting pipe requests".into())
                 })?;
             return Ok(());
-        },
+        }
         Ok(ControlRequest::Shell { open }) => {
             requests
                 .send(RuntimeControlRequest::Shell { open, stream })
                 .await
                 .map_err(|_| {
-                    Error::Session("the local tunnel runtime is not accepting shell requests".into())
+                    Error::Session(
+                        "the local tunnel runtime is not accepting shell requests".into(),
+                    )
                 })?;
             return Ok(());
-        },
+        }
         Ok(ControlRequest::SendFile { open }) => {
             requests
                 .send(RuntimeControlRequest::SendFile { open, stream })
@@ -366,7 +383,7 @@ async fn handle_stream(
                     )
                 })?;
             return Ok(());
-        },
+        }
         Err(error) => ControlResponse::Error {
             message: format!("invalid control request: {error}"),
         },
@@ -380,9 +397,7 @@ async fn handle_stream(
     Ok(())
 }
 
-async fn read_request_line(
-    stream: &mut async_std::os::unix::net::UnixStream,
-) -> Result<String> {
+async fn read_request_line(stream: &mut async_std::os::unix::net::UnixStream) -> Result<String> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -395,9 +410,8 @@ async fn read_request_line(
             break;
         }
     }
-    Ok(String::from_utf8(line).map_err(|error| {
-        Error::Session(format!("control request was not valid UTF-8: {error}"))
-    })?)
+    String::from_utf8(line)
+        .map_err(|error| Error::Session(format!("control request was not valid UTF-8: {error}")))
 }
 
 async fn round_trip_runtime_request<Fallback, Build>(
@@ -450,7 +464,11 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::read_request_line;
-    use async_std::{io::{ReadExt, WriteExt}, os::unix::net::UnixStream, task};
+    use async_std::{
+        io::{ReadExt, WriteExt},
+        os::unix::net::UnixStream,
+        task,
+    };
 
     #[test]
     fn read_request_line_leaves_following_bytes_intact() {

@@ -97,7 +97,7 @@ pub async fn run_remote_receive(
             Some(FileTransferPacket::Chunk { data }) => {
                 file.write_all(&data)?;
                 bytes_written += data.len() as u64;
-            },
+            }
             Some(FileTransferPacket::Done) => {
                 file.flush()?;
                 send_channel_packet(
@@ -110,22 +110,22 @@ pub async fn run_remote_receive(
                 .await?;
                 channel.close().await?;
                 return Ok(());
-            },
+            }
             Some(FileTransferPacket::Error { message }) => {
                 let _ = fs::remove_file(&destination);
                 return Err(Error::Session(message));
-            },
+            }
             Some(FileTransferPacket::Success { .. }) => {
                 return Err(Error::Session(
                     "received a file transfer success packet before the transfer finished".into(),
                 ));
-            },
+            }
             None => {
                 let _ = fs::remove_file(&destination);
                 return Err(Error::Session(
                     "the file transfer ended before the sender finished streaming bytes".into(),
                 ));
-            },
+            }
         }
     }
 }
@@ -163,23 +163,17 @@ pub async fn run_local_send(
     write_stream_packet(&mut stream, &FileTransferPacket::Done).await?;
     on_progress(total_bytes, total_bytes)?;
 
-    loop {
-        match read_stream_packet(&mut stream).await? {
-            Some(FileTransferPacket::Success { path, bytes }) => {
-                return Ok(FileTransferResult { path, bytes });
-            },
-            Some(FileTransferPacket::Error { message }) => return Err(Error::Session(message)),
-            Some(FileTransferPacket::Chunk { .. }) | Some(FileTransferPacket::Done) => {
-                return Err(Error::Session(
-                    "received unexpected file transfer data after the local send finished".into(),
-                ));
-            },
-            None => {
-                return Err(Error::Session(
-                    "the file transfer ended before the peer confirmed the write".into(),
-                ));
-            },
+    match read_stream_packet(&mut stream).await? {
+        Some(FileTransferPacket::Success { path, bytes }) => Ok(FileTransferResult { path, bytes }),
+        Some(FileTransferPacket::Error { message }) => Err(Error::Session(message)),
+        Some(FileTransferPacket::Chunk { .. }) | Some(FileTransferPacket::Done) => {
+            Err(Error::Session(
+                "received unexpected file transfer data after the local send finished".into(),
+            ))
         }
+        None => Err(Error::Session(
+            "the file transfer ended before the peer confirmed the write".into(),
+        )),
     }
 }
 
@@ -306,7 +300,7 @@ where
 {
     let mut len = [0u8; 4];
     match reader.read_exact(&mut len).await {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(error) => return Err(error.into()),
     }

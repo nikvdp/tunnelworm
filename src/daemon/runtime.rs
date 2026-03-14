@@ -1,5 +1,10 @@
 use async_channel::{Receiver, Sender};
-use async_std::{io, net::{TcpListener, TcpStream}, prelude::*, task};
+use async_std::{
+    io,
+    net::{TcpListener, TcpStream},
+    prelude::*,
+    task,
+};
 use fs2::FileExt;
 use futures::{FutureExt, select};
 use serde::{Deserialize, Serialize};
@@ -11,17 +16,27 @@ use std::{
 };
 
 use crate::{
-    cli::{stderr_style, TunnelCapability, TunnelPolicyRule},
+    cli::{TunnelCapability, TunnelPolicyRule, stderr_style},
     control::{ControlResponse, ControlServer, RuntimeControlRequest},
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
-    file_transfer::{self, FileTransferOpen, FileTransferPacket, bridge_local_file_stream, run_remote_receive, write_stream_packet as write_file_stream_packet},
+    file_transfer::{
+        self, FileTransferOpen, FileTransferPacket, bridge_local_file_stream, run_remote_receive,
+        write_stream_packet as write_file_stream_packet,
+    },
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
     mux::{ChannelKind, IncomingChannel, MuxSession, MuxTransport},
+    persistent::{
+        ManagedPortDefinition, ManagedPortForward, PersistentRole, TunnelRuntimePhase,
+        TunnelRuntimeStatus, capability_allowed, load_state, remove_state_artifacts,
+        runtime_status_path, save_state,
+    },
     pipe::PipeMode,
-    persistent::{ManagedPortDefinition, ManagedPortForward, PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, capability_allowed, load_state, remove_state_artifacts, runtime_status_path, save_state},
     session::{self, SessionOptions},
-    shell::{ShellOpen, ShellPacket, bridge_local_shell_stream, run_remote_shell, send_channel_packet, write_stream_packet},
+    shell::{
+        ShellOpen, ShellPacket, bridge_local_shell_stream, run_remote_shell, send_channel_packet,
+        write_stream_packet,
+    },
     status_line::StatusLine,
 };
 
@@ -84,6 +99,16 @@ struct PortForwardBroker {
     listeners: Mutex<std::collections::HashMap<u32, Sender<()>>>,
 }
 
+#[derive(Clone)]
+struct RuntimeShared {
+    live_session: Arc<Mutex<Option<MuxSession>>>,
+    peer_policy: Arc<Mutex<Vec<TunnelPolicyRule>>>,
+    pipe_broker: Arc<PipeBroker>,
+    port_broker: Arc<PortForwardBroker>,
+    runtime_status: PersistentRuntimeStatus,
+    style: crate::cli::AnsiStyle,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PortControlRequest {
     action: PortControlAction,
@@ -123,11 +148,11 @@ fn parse_listen_endpoint(input: &str) -> Result<TcpListen> {
             }
             Ok(TcpListen {
                 host: value.to_string(),
-                port: port
-                    .parse::<u16>()
-                    .map_err(|_| Error::Usage(format!("invalid listen endpoint port in {input:?}")))?,
+                port: port.parse::<u16>().map_err(|_| {
+                    Error::Usage(format!("invalid listen endpoint port in {input:?}"))
+                })?,
             })
-        },
+        }
         _ => Err(Error::Usage(format!(
             "unsupported listen endpoint {input:?}; expected tcp:PORT[:interface=HOST]"
         ))),
@@ -257,7 +282,7 @@ async fn handle_incoming_channel(
             }
             incoming.channel.close().await?;
             Ok(())
-        },
+        }
         ChannelKind::PortForward => {
             ensure_policy_allows(
                 &load_state(state_path)?.config.policy_rules,
@@ -283,7 +308,7 @@ async fn handle_incoming_channel(
             })?;
             eprintln!("{} {detail}", style.status("Forwarding:"));
             bridge_stream_and_channel(stream, incoming.channel).await
-        },
+        }
         ChannelKind::PortControl => {
             let request: PortControlRequest = serde_json::from_slice(&incoming.open_payload)?;
             handle_remote_port_control(
@@ -296,7 +321,7 @@ async fn handle_incoming_channel(
                 style,
             )
             .await
-        },
+        }
         ChannelKind::Pipe => {
             ensure_policy_allows(
                 &load_state(state_path)?.config.policy_rules,
@@ -312,7 +337,7 @@ async fn handle_incoming_channel(
                         incoming.channel,
                     ));
                     Ok(())
-                },
+                }
                 (None, None) => queue_pipe_channel(&pipe_broker, incoming.channel),
                 (maybe_sender, Some(existing_channel)) => {
                     if let Some(local_stream) = maybe_sender {
@@ -322,9 +347,9 @@ async fn handle_incoming_channel(
                     Err(Error::Session(
                         "another pipe channel is already waiting locally".into(),
                     ))
-                },
+                }
             }
-        },
+        }
         ChannelKind::Shell => {
             ensure_policy_allows(
                 &load_state(state_path)?.config.policy_rules,
@@ -345,7 +370,7 @@ async fn handle_incoming_channel(
                 }
             });
             Ok(())
-        },
+        }
         ChannelKind::FileTransfer => {
             ensure_policy_allows(
                 &load_state(state_path)?.config.policy_rules,
@@ -354,7 +379,9 @@ async fn handle_incoming_channel(
             )?;
             let open: FileTransferOpen = serde_json::from_slice(&incoming.open_payload)?;
             let base_dir = std::env::current_dir().map_err(|error| {
-                Error::Session(format!("could not resolve the remote working directory: {error}"))
+                Error::Session(format!(
+                    "could not resolve the remote working directory: {error}"
+                ))
             })?;
             task::spawn(async move {
                 if let Err(error) =
@@ -371,7 +398,7 @@ async fn handle_incoming_channel(
                 }
             });
             Ok(())
-        },
+        }
     }
 }
 
@@ -389,7 +416,6 @@ async fn drive_incoming_channels(
         let state_path = state_path.clone();
         let session = session.clone();
         let runtime_status = runtime_status.clone();
-        let style = style.clone();
         task::spawn(async move {
             let _ = handle_incoming_channel(
                 incoming,
@@ -412,14 +438,17 @@ async fn drive_listener(
     style: crate::cli::AnsiStyle,
     cancel: Receiver<()>,
 ) -> Result<()> {
-    let listener = TcpListener::bind((listener_plan.listen_host.as_str(), listener_plan.listen_port))
-        .await
-        .map_err(|error| {
-            Error::Session(format!(
-                "could not listen on {}:{}: {error}",
-                listener_plan.listen_host, listener_plan.listen_port
-            ))
-        })?;
+    let listener = TcpListener::bind((
+        listener_plan.listen_host.as_str(),
+        listener_plan.listen_port,
+    ))
+    .await
+    .map_err(|error| {
+        Error::Session(format!(
+            "could not listen on {}:{}: {error}",
+            listener_plan.listen_host, listener_plan.listen_port
+        ))
+    })?;
 
     let detail = format!(
         "local {}:{} -> peer {}:{}",
@@ -520,10 +549,7 @@ fn queue_pipe_sender(
     Ok(())
 }
 
-fn queue_pipe_channel(
-    broker: &Arc<PipeBroker>,
-    channel: crate::mux::MuxChannel,
-) -> Result<()> {
+fn queue_pipe_channel(broker: &Arc<PipeBroker>, channel: crate::mux::MuxChannel) -> Result<()> {
     let mut pending_channel = broker
         .pending_channel
         .lock()
@@ -572,7 +598,10 @@ fn managed_listen_host(forward: &ManagedPortForward) -> &str {
 }
 
 fn managed_remote_connect_host(forward: &ManagedPortForward) -> &str {
-    forward.remote_connect_host.as_deref().unwrap_or("127.0.0.1")
+    forward
+        .remote_connect_host
+        .as_deref()
+        .unwrap_or("127.0.0.1")
 }
 
 fn ensure_policy_allows(
@@ -614,18 +643,18 @@ fn validate_managed_port_forward(forward: &ManagedPortForward) -> Result<()> {
     let remote_connect = forward.remote_connect_port.is_some();
 
     match (local_listen, local_connect, remote_listen, remote_connect) {
-        (true, false, false, true) | (false, true, true, false) => {},
+        (true, false, false, true) | (false, true, true, false) => {}
         _ => {
             return Err(Error::Session(format!(
                 "forward {} is not a supported local/remote port mapping",
                 forward.id
-            )))
-        },
+            )));
+        }
     }
 
     if let Some(port) = forward.local_listen_port {
-        let listener = std::net::TcpListener::bind((managed_listen_host(forward), port))
-            .map_err(|error| {
+        let listener =
+            std::net::TcpListener::bind((managed_listen_host(forward), port)).map_err(|error| {
                 Error::Session(format!(
                     "could not listen on {}:{}: {error}",
                     managed_listen_host(forward),
@@ -719,7 +748,7 @@ async fn activate_managed_port_forward(
         listener,
         session.clone(),
         runtime_status.clone(),
-        style.clone(),
+        *style,
         cancel_rx,
     ));
     Ok(())
@@ -857,7 +886,12 @@ async fn handle_remote_port_control(
             let mut state = load_state(state_path)?;
             let migrating_compat_forward =
                 uses_compat_startup_forwards(&state) && state.config.ports.is_empty();
-            if state.config.ports.iter().any(|existing| existing.id == forward.id) {
+            if state
+                .config
+                .ports
+                .iter()
+                .any(|existing| existing.id == forward.id)
+            {
                 Err(Error::Session(format!(
                     "port forward {} already exists on the remote side",
                     forward.id
@@ -869,11 +903,17 @@ async fn handle_remote_port_control(
                 }
                 state.config.ports.push(forward.clone());
                 save_state(state_path, &state)?;
-                activate_managed_port_forward(&forward, session, port_broker, runtime_status, style)
-                    .await?;
+                activate_managed_port_forward(
+                    &forward,
+                    session,
+                    port_broker,
+                    runtime_status,
+                    style,
+                )
+                .await?;
                 Ok(())
             }
-        },
+        }
         PortControlAction::Remove { id } => {
             ensure_policy_allows(
                 &local_policy,
@@ -885,7 +925,7 @@ async fn handle_remote_port_control(
             save_state(state_path, &state)?;
             deactivate_managed_port_forward(id, port_broker).await;
             Ok(())
-        },
+        }
     };
 
     let response = match result {
@@ -902,12 +942,8 @@ async fn handle_remote_port_control(
 async fn handle_runtime_control_request(
     request: RuntimeControlRequest,
     session: Option<MuxSession>,
-    peer_policy: Arc<Mutex<Vec<TunnelPolicyRule>>>,
-    pipe_broker: Arc<PipeBroker>,
-    port_broker: Arc<PortForwardBroker>,
     state_path: &Path,
-    runtime_status: &PersistentRuntimeStatus,
-    style: &crate::cli::AnsiStyle,
+    shared: &RuntimeShared,
 ) -> Result<()> {
     match request {
         RuntimeControlRequest::Probe { reply } => {
@@ -922,7 +958,8 @@ async fn handle_runtime_control_request(
                     detail: Some("persistent worker is starting".into()),
                 }
             };
-            let peer_policy_rules = peer_policy
+            let peer_policy_rules = shared
+                .peer_policy
                 .lock()
                 .expect("peer policy mutex poisoned")
                 .clone();
@@ -934,11 +971,13 @@ async fn handle_runtime_control_request(
                     peer_policy_rules,
                 }))
                 .await;
-        },
+        }
         RuntimeControlRequest::Echo { payload, reply } => {
             let Some(session) = session else {
                 let _ = reply
-                    .send(Err(Error::Session("the tunnel is not connected yet".into())))
+                    .send(Err(Error::Session(
+                        "the tunnel is not connected yet".into(),
+                    )))
                     .await;
                 return Ok(());
             };
@@ -954,21 +993,21 @@ async fn handle_runtime_control_request(
                     payload: String::from_utf8_lossy(&echoed).into_owned(),
                 }))
                 .await;
-        },
+        }
         RuntimeControlRequest::PortsAdd { definition, reply } => {
             let Some(session) = session else {
                 let _ = reply
-                    .send(Err(Error::Session("the tunnel is not connected yet".into())))
+                    .send(Err(Error::Session(
+                        "the tunnel is not connected yet".into(),
+                    )))
                     .await;
                 return Ok(());
             };
-            let result = (|| {
-                ensure_peer_policy_allows(
-                    &peer_policy,
-                    TunnelCapability::RemotePortMgmt,
-                    "remote port management",
-                )
-            })();
+            let result = ensure_peer_policy_allows(
+                &shared.peer_policy,
+                TunnelCapability::RemotePortMgmt,
+                "remote port management",
+            );
             if let Err(error) = result {
                 let _ = reply.send(Err(error)).await;
                 return Ok(());
@@ -977,9 +1016,9 @@ async fn handle_runtime_control_request(
                 state_path,
                 &session,
                 definition,
-                &port_broker,
-                runtime_status,
-                style,
+                &shared.port_broker,
+                &shared.runtime_status,
+                &shared.style,
             )
             .await
             {
@@ -987,80 +1026,71 @@ async fn handle_runtime_control_request(
                     let _ = reply
                         .send(Ok(ControlResponse::PortsAdded { forward }))
                         .await;
-                },
+                }
                 Err(error) => {
                     let _ = reply.send(Err(error)).await;
-                },
+                }
             }
-        },
+        }
         RuntimeControlRequest::PortsRemove { id, reply } => {
             let Some(session) = session else {
                 let _ = reply
-                    .send(Err(Error::Session("the tunnel is not connected yet".into())))
+                    .send(Err(Error::Session(
+                        "the tunnel is not connected yet".into(),
+                    )))
                     .await;
                 return Ok(());
             };
-            let result = (|| {
-                ensure_peer_policy_allows(
-                    &peer_policy,
-                    TunnelCapability::RemotePortMgmt,
-                    "remote port management",
-                )
-            })();
+            let result = ensure_peer_policy_allows(
+                &shared.peer_policy,
+                TunnelCapability::RemotePortMgmt,
+                "remote port management",
+            );
             if let Err(error) = result {
                 let _ = reply.send(Err(error)).await;
                 return Ok(());
             }
-            match remove_managed_port_forward(
-                state_path,
-                &session,
-                id,
-                &port_broker,
-            )
-            .await
-            {
+            match remove_managed_port_forward(state_path, &session, id, &shared.port_broker).await {
                 Ok(()) => {
-                    let _ = reply
-                        .send(Ok(ControlResponse::PortsRemoved { id }))
-                        .await;
-                },
+                    let _ = reply.send(Ok(ControlResponse::PortsRemoved { id })).await;
+                }
                 Err(error) => {
                     let _ = reply.send(Err(error)).await;
-                },
+                }
             }
-        },
+        }
         RuntimeControlRequest::Pipe { mode, stream } => {
             let Some(session) = session else {
                 return Err(Error::Session("the tunnel is not connected yet".into()));
             };
-            ensure_peer_policy_allows(&peer_policy, TunnelCapability::Pipe, "pipe")?;
+            ensure_peer_policy_allows(&shared.peer_policy, TunnelCapability::Pipe, "pipe")?;
             match mode {
                 PipeMode::Receive => {
                     let channel = session.open_channel(ChannelKind::Pipe, Vec::new()).await?;
                     task::spawn(attach_pipe_stream(PipeMode::Receive, stream, channel));
-                },
+                }
                 PipeMode::Send => {
-                    let (maybe_sender, maybe_channel) = take_pending_pipe_pair(&pipe_broker);
+                    let (maybe_sender, maybe_channel) = take_pending_pipe_pair(&shared.pipe_broker);
                     match (maybe_sender, maybe_channel) {
                         (None, Some(channel)) => {
                             task::spawn(attach_pipe_stream(PipeMode::Send, stream, channel));
-                        },
+                        }
                         (None, None) => {
-                            queue_pipe_sender(&pipe_broker, stream)?;
-                        },
+                            queue_pipe_sender(&shared.pipe_broker, stream)?;
+                        }
                         (Some(existing_sender), maybe_channel) => {
-                            let _ = queue_pipe_sender(&pipe_broker, existing_sender);
+                            let _ = queue_pipe_sender(&shared.pipe_broker, existing_sender);
                             if let Some(channel) = maybe_channel {
-                                let _ = queue_pipe_channel(&pipe_broker, channel);
+                                let _ = queue_pipe_channel(&shared.pipe_broker, channel);
                             }
                             return Err(Error::Session(
                                 "a pipe send command is already waiting for the peer".into(),
                             ));
-                        },
+                        }
                     }
-                },
+                }
             }
-        },
+        }
         RuntimeControlRequest::Shell { open, stream } => {
             let Some(session) = session else {
                 let mut stream = stream;
@@ -1074,7 +1104,7 @@ async fn handle_runtime_control_request(
                 return Ok(());
             };
             if let Err(error) =
-                ensure_peer_policy_allows(&peer_policy, TunnelCapability::Shell, "shell")
+                ensure_peer_policy_allows(&shared.peer_policy, TunnelCapability::Shell, "shell")
             {
                 let mut stream = stream;
                 write_stream_packet(
@@ -1094,7 +1124,7 @@ async fn handle_runtime_control_request(
                     task::spawn(async move {
                         let _ = bridge_local_shell_stream(stream, channel).await;
                     });
-                },
+                }
                 Err(error) => {
                     let mut stream = stream;
                     write_stream_packet(
@@ -1104,9 +1134,9 @@ async fn handle_runtime_control_request(
                         },
                     )
                     .await?;
-                },
+                }
             }
-        },
+        }
         RuntimeControlRequest::SendFile { open, stream } => {
             let Some(session) = session else {
                 let mut stream = stream;
@@ -1120,7 +1150,7 @@ async fn handle_runtime_control_request(
                 return Ok(());
             };
             if let Err(error) = ensure_peer_policy_allows(
-                &peer_policy,
+                &shared.peer_policy,
                 TunnelCapability::SendFile,
                 "file transfer",
             ) {
@@ -1142,7 +1172,7 @@ async fn handle_runtime_control_request(
                     task::spawn(async move {
                         let _ = bridge_local_file_stream(stream, channel).await;
                     });
-                },
+                }
                 Err(error) => {
                     let mut stream = stream;
                     write_file_stream_packet(
@@ -1152,39 +1182,25 @@ async fn handle_runtime_control_request(
                         },
                     )
                     .await?;
-                },
+                }
             }
-        },
+        }
     }
     Ok(())
 }
 
 async fn drive_runtime_control_requests(
     requests: Receiver<RuntimeControlRequest>,
-    live_session: Arc<Mutex<Option<MuxSession>>>,
-    peer_policy: Arc<Mutex<Vec<TunnelPolicyRule>>>,
-    pipe_broker: Arc<PipeBroker>,
-    port_broker: Arc<PortForwardBroker>,
     state_path: PathBuf,
-    runtime_status: PersistentRuntimeStatus,
-    style: crate::cli::AnsiStyle,
+    shared: RuntimeShared,
 ) {
     while let Ok(request) = requests.recv().await {
-        let session = live_session
+        let session = shared
+            .live_session
             .lock()
             .expect("live session mutex poisoned")
             .clone();
-        let _ = handle_runtime_control_request(
-            request,
-            session,
-            peer_policy.clone(),
-            pipe_broker.clone(),
-            port_broker.clone(),
-            &state_path,
-            &runtime_status,
-            &style,
-        )
-        .await;
+        let _ = handle_runtime_control_request(request, session, &state_path, &shared).await;
     }
 }
 
@@ -1219,7 +1235,13 @@ async fn session_task(
         if let Some(welcome) = prepared.welcome.clone() {
             emit_event(&events, OutputEvent::Welcome { welcome }).await;
         }
-        emit_event(&events, OutputEvent::CodeAllocated { code: prepared.code.clone() }).await;
+        emit_event(
+            &events,
+            OutputEvent::CodeAllocated {
+                code: prepared.code.clone(),
+            },
+        )
+        .await;
 
         let mut connected = prepared.connect().await?;
         emit_event(
@@ -1247,14 +1269,20 @@ async fn session_task(
                 let listen = format!("tcp:{listen_port}:interface={listen_host}");
                 let connect = format!("tcp:{connect_host}:{connect_port}");
                 let _ = events.send_blocking(OutputEvent::Listening { listen, connect });
-            },
+            }
         })
         .await
     }
     .await;
 
     if let Err(error) = result {
-        emit_event(&events, OutputEvent::Error { message: error.to_string() }).await;
+        emit_event(
+            &events,
+            OutputEvent::Error {
+                message: error.to_string(),
+            },
+        )
+        .await;
     }
     emit_event(&events, OutputEvent::Closed {}).await;
 }
@@ -1279,7 +1307,7 @@ async fn stdin_task(lines: Sender<String>) {
                 if lines.send(line).await.is_err() {
                     break;
                 }
-            },
+            }
             Err(_) => break,
         }
     }
@@ -1400,16 +1428,19 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     let peer_policy = Arc::new(Mutex::new(Vec::<TunnelPolicyRule>::new()));
     let pipe_broker = Arc::new(PipeBroker::default());
     let port_broker = Arc::new(PortForwardBroker::default());
+    let shared = RuntimeShared {
+        live_session: live_session.clone(),
+        peer_policy: peer_policy.clone(),
+        pipe_broker: pipe_broker.clone(),
+        port_broker: port_broker.clone(),
+        runtime_status: runtime_status.clone(),
+        style,
+    };
     let _control = ControlServer::spawn(&_state_path, control_tx)?;
     task::spawn(drive_runtime_control_requests(
         control_rx,
-        live_session.clone(),
-        peer_policy.clone(),
-        pipe_broker.clone(),
-        port_broker.clone(),
         _state_path.clone(),
-        runtime_status.clone(),
-        style.clone(),
+        shared.clone(),
     ));
     let mut state = state;
     if !state.config.temporary && state.peer_public_key_hex.is_none() {
@@ -1424,18 +1455,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
         policy_rules: state.config.policy_rules.clone(),
     };
     if state.config.temporary {
-        return run_temporary_tunnel(
-            &_state_path,
-            &mut state,
-            &intent,
-            &style,
-            &runtime_status,
-            live_session,
-            peer_policy,
-            pipe_broker,
-            port_broker,
-        )
-        .await;
+        return run_temporary_tunnel(&_state_path, &mut state, &intent, &shared).await;
     }
     let mut retry_delay = 1u64;
     runtime_status.write(TunnelRuntimeStatus {
@@ -1470,13 +1490,12 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
             runtime_status.write(TunnelRuntimeStatus {
                 phase: TunnelRuntimePhase::Starting,
-                detail: Some(format!(
-                    "peer connected; bringing the live tunnel up..."
-                )),
+                detail: Some("peer connected; bringing the live tunnel up...".to_string()),
             })?;
             session::authenticate_persistent_peer(&mut connected, &mut state).await?;
 
-            let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, &intent).await?;
+            let peer_intent =
+                forward::exchange_cli_intents(&mut connected.wormhole, &intent).await?;
             *peer_policy.lock().expect("peer policy mutex poisoned") =
                 peer_intent.policy_rules.clone();
             let plan = forward::build_cli_plan(&intent, &peer_intent)?;
@@ -1487,7 +1506,10 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             for target in &plan_targets {
                 let detail = format!(
                     "peer {}:{} -> local {}:{}",
-                    target.listen_host, target.listen_port, target.connect_host, target.connect_port
+                    target.listen_host,
+                    target.listen_port,
+                    target.connect_host,
+                    target.connect_port
                 );
                 runtime_status.write(TunnelRuntimeStatus {
                     phase: TunnelRuntimePhase::Up,
@@ -1498,7 +1520,8 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             let transport = MuxTransport::connect(connected, reconnect_role).await?;
             let mux_session = transport.session();
             {
-                *live_session.lock().expect("live session mutex poisoned") = Some(mux_session.clone());
+                *live_session.lock().expect("live session mutex poisoned") =
+                    Some(mux_session.clone());
             }
             runtime_status.write(TunnelRuntimeStatus {
                 phase: TunnelRuntimePhase::Up,
@@ -1506,29 +1529,29 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             })?;
             let incoming_task = task::spawn(drive_incoming_channels(
                 mux_session.clone(),
-                pipe_broker.clone(),
-                port_broker.clone(),
+                shared.pipe_broker.clone(),
+                shared.port_broker.clone(),
                 _state_path.clone(),
-                runtime_status.clone(),
-                style.clone(),
+                shared.runtime_status.clone(),
+                shared.style,
             ));
             let compat_seeded = maybe_seed_compat_managed_ports(
                 &_state_path,
                 &mut state,
                 &plan_listeners,
                 &mux_session,
-                &port_broker,
-                &runtime_status,
-                &style,
+                &shared.port_broker,
+                &shared.runtime_status,
+                &shared.style,
             )
             .await?;
             if !compat_seeded {
                 restore_managed_port_forwards(
                     &_state_path,
                     &mux_session,
-                    &port_broker,
-                    &runtime_status,
-                    &style,
+                    &shared.port_broker,
+                    &shared.runtime_status,
+                    &shared.style,
                 )
                 .await?;
             }
@@ -1544,8 +1567,8 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 listener_tasks.push(task::spawn(drive_listener(
                     listener,
                     mux_session.clone(),
-                    runtime_status.clone(),
-                    style.clone(),
+                    shared.runtime_status.clone(),
+                    shared.style,
                     listener_cancel_rx.clone(),
                 )));
             }
@@ -1557,9 +1580,13 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             }
             let _ = incoming_task.cancel().await;
             *live_session.lock().expect("live session mutex poisoned") = None;
-            peer_policy.lock().expect("peer policy mutex poisoned").clear();
-            clear_pending_pipe_state(&pipe_broker);
-            clear_managed_port_forward_state(&port_broker).await;
+            shared
+                .peer_policy
+                .lock()
+                .expect("peer policy mutex poisoned")
+                .clear();
+            clear_pending_pipe_state(&shared.pipe_broker);
+            clear_managed_port_forward_state(&shared.port_broker).await;
             transport_result
         }
         .await;
@@ -1571,8 +1598,11 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                     phase: TunnelRuntimePhase::Waiting,
                     detail: Some("session ended; reconnecting".into()),
                 })?;
-                eprintln!("{} session ended; reconnecting...", style.status("Status:"));
-            },
+                eprintln!(
+                    "{} session ended; reconnecting...",
+                    shared.style.status("Status:")
+                );
+            }
             Err(error) if is_hard_persistent_failure(&error) => return Err(error),
             Err(error) => {
                 sleep_with_retry_status(
@@ -1585,7 +1615,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 .await?;
                 retry_delay = next_retry_delay(&error, retry_delay);
                 continue;
-            },
+            }
         }
     }
 }
@@ -1594,12 +1624,7 @@ async fn run_temporary_tunnel(
     state_path: &Path,
     state: &mut crate::persistent::PersistentState,
     intent: &forward::CliIntent,
-    style: &crate::cli::AnsiStyle,
-    runtime_status: &PersistentRuntimeStatus,
-    live_session: Arc<Mutex<Option<MuxSession>>>,
-    peer_policy: Arc<Mutex<Vec<TunnelPolicyRule>>>,
-    pipe_broker: Arc<PipeBroker>,
-    port_broker: Arc<PortForwardBroker>,
+    shared: &RuntimeShared,
 ) -> Result<()> {
     let interrupt = install_interrupt_notifier()?;
     let role = state.config.role;
@@ -1619,24 +1644,32 @@ async fn run_temporary_tunnel(
         state.config.name = temporary_tunnel_name(&state.config, &state.config.code);
         save_state(state_path, state)?;
     }
-    print_temporary_intro(style, state);
+    print_temporary_intro(&shared.style, state);
 
     if let Some(welcome) = &prepared.welcome {
-        eprintln!("{} {welcome}", style.label("Mailbox:"));
+        eprintln!("{} {welcome}", shared.style.label("Mailbox:"));
     }
 
-    let mut connected =
-        connect_with_progress(prepared, style, runtime_status, role, &state.config.code).await?;
-    eprintln!("{} peer connected", style.status("Status:"));
-    eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
-    runtime_status.write(TunnelRuntimeStatus {
+    let mut connected = connect_with_progress(
+        prepared,
+        &shared.style,
+        &shared.runtime_status,
+        role,
+        &state.config.code,
+    )
+    .await?;
+    eprintln!("{} peer connected", shared.style.status("Status:"));
+    eprintln!("{} {}", shared.style.label("Verifier:"), connected.verifier);
+    shared.runtime_status.write(TunnelRuntimeStatus {
         phase: TunnelRuntimePhase::Starting,
         detail: Some("peer connected; bringing the live tunnel up...".into()),
     })?;
 
     let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, intent).await?;
-    *peer_policy.lock().expect("peer policy mutex poisoned") =
-        peer_intent.policy_rules.clone();
+    *shared
+        .peer_policy
+        .lock()
+        .expect("peer policy mutex poisoned") = peer_intent.policy_rules.clone();
     let plan = forward::build_cli_plan(intent, &peer_intent)?;
     let forward::ForwardPlan {
         listeners: plan_listeners,
@@ -1647,47 +1680,50 @@ async fn run_temporary_tunnel(
             "peer {}:{} -> local {}:{}",
             target.listen_host, target.listen_port, target.connect_host, target.connect_port
         );
-        runtime_status.write(TunnelRuntimeStatus {
+        shared.runtime_status.write(TunnelRuntimeStatus {
             phase: TunnelRuntimePhase::Up,
             detail: Some(detail.clone()),
         })?;
-        eprintln!("{} {detail}", style.status("Forwarding:"));
+        eprintln!("{} {detail}", shared.style.status("Forwarding:"));
     }
 
     let transport = MuxTransport::connect(connected, role).await?;
     let mux_session = transport.session();
     {
-        *live_session.lock().expect("live session mutex poisoned") = Some(mux_session.clone());
+        *shared
+            .live_session
+            .lock()
+            .expect("live session mutex poisoned") = Some(mux_session.clone());
     }
-    runtime_status.write(TunnelRuntimeStatus {
+    shared.runtime_status.write(TunnelRuntimeStatus {
         phase: TunnelRuntimePhase::Up,
         detail: Some("peer connected; live tunnel ready".into()),
     })?;
     let incoming_task = task::spawn(drive_incoming_channels(
         mux_session.clone(),
-        pipe_broker.clone(),
-        port_broker.clone(),
+        shared.pipe_broker.clone(),
+        shared.port_broker.clone(),
         state_path.to_path_buf(),
-        runtime_status.clone(),
-        style.clone(),
+        shared.runtime_status.clone(),
+        shared.style,
     ));
     let compat_seeded = maybe_seed_compat_managed_ports(
         state_path,
         state,
         &plan_listeners,
         &mux_session,
-        &port_broker,
-        runtime_status,
-        style,
+        &shared.port_broker,
+        &shared.runtime_status,
+        &shared.style,
     )
     .await?;
     if !compat_seeded {
         restore_managed_port_forwards(
             state_path,
             &mux_session,
-            &port_broker,
-            runtime_status,
-            style,
+            &shared.port_broker,
+            &shared.runtime_status,
+            &shared.style,
         )
         .await?;
     }
@@ -1703,8 +1739,8 @@ async fn run_temporary_tunnel(
         listener_tasks.push(task::spawn(drive_listener(
             listener,
             mux_session.clone(),
-            runtime_status.clone(),
-            style.clone(),
+            shared.runtime_status.clone(),
+            shared.style,
             listener_cancel_rx.clone(),
         )));
     }
@@ -1722,10 +1758,17 @@ async fn run_temporary_tunnel(
         let _ = task.await;
     }
     let _ = incoming_task.cancel().await;
-    *live_session.lock().expect("live session mutex poisoned") = None;
-    peer_policy.lock().expect("peer policy mutex poisoned").clear();
-    clear_pending_pipe_state(&pipe_broker);
-    clear_managed_port_forward_state(&port_broker).await;
+    *shared
+        .live_session
+        .lock()
+        .expect("live session mutex poisoned") = None;
+    shared
+        .peer_policy
+        .lock()
+        .expect("peer policy mutex poisoned")
+        .clear();
+    clear_pending_pipe_state(&shared.pipe_broker);
+    clear_managed_port_forward_state(&shared.port_broker).await;
     result
 }
 
@@ -1739,7 +1782,11 @@ fn print_temporary_intro(
     };
     eprintln!("{} {}", style.heading(heading), state.config.code);
     eprintln!("{} {}", style.heading("Local tunnel:"), state.config.name);
-    eprintln!("{} {}", style.heading("Local:"), temporary_local_summary(&state.config));
+    eprintln!(
+        "{} {}",
+        style.heading("Local:"),
+        temporary_local_summary(&state.config)
+    );
     eprintln!();
     eprintln!("{}", style.heading("Peer commands"));
     if let Some(preferred) = temporary_peer_preferred_command(&state.config) {
@@ -1756,7 +1803,8 @@ fn temporary_local_summary(config: &crate::persistent::PersistentConfig) -> Stri
         return format!(
             "listen on {}:{}",
             local.bind_interface.as_deref().unwrap_or("127.0.0.1"),
-            local.local_listen_port
+            local
+                .local_listen_port
                 .map(|port| port.to_string())
                 .unwrap_or_else(|| "PORT".into())
         );
@@ -1795,7 +1843,8 @@ fn temporary_peer_ssh_command(config: &crate::persistent::PersistentConfig) -> O
     if let Some(local) = config.locals.first() {
         return Some(format!(
             "tunnelworm -R {}:HOST:PORT {}",
-            local.local_listen_port
+            local
+                .local_listen_port
                 .map(|port| port.to_string())
                 .unwrap_or_else(|| "LISTEN_PORT".into()),
             config.code
@@ -1840,7 +1889,7 @@ fn reconnect_role(state: &crate::persistent::PersistentState) -> PersistentRole 
             } else {
                 PersistentRole::Join
             }
-        },
+        }
         None => state.config.role,
     }
 }
@@ -1851,6 +1900,7 @@ fn acquire_persistent_state_lock(state_path: &Path) -> Result<File> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(&lock_path)?;
 
     lock_file.try_lock_exclusive().map_err(|_| {
@@ -1875,9 +1925,7 @@ fn next_retry_delay(error: &Error, retry_delay: u64) -> u64 {
 
 fn persistent_retry_message(code: &str, error: &Error, retry_delay: u64) -> String {
     if is_expected_rendezvous_gap(error) {
-        return format!(
-            "waiting for the peer to claim code {code}; retrying in {retry_delay}s..."
-        );
+        return format!("waiting for the peer to claim code {code}; retrying in {retry_delay}s...");
     }
     if is_transit_disconnect(error) {
         return format!("the previous tunnel session ended; retrying in {retry_delay}s...");
@@ -1901,7 +1949,11 @@ fn install_interrupt_notifier() -> Result<async_channel::Receiver<()>> {
     ctrlc::set_handler(move || {
         let _ = tx.try_send(());
     })
-    .map_err(|error| Error::Session(format!("could not install temporary tunnel signal handler: {error}")))?;
+    .map_err(|error| {
+        Error::Session(format!(
+            "could not install temporary tunnel signal handler: {error}"
+        ))
+    })?;
     Ok(rx)
 }
 

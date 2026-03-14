@@ -4,8 +4,8 @@ use std::io::{self, ErrorKind, Write};
 
 use tunnelworm::{
     cli::{
-        parse_tunnelworm_cli, stderr_style, tunnelworm_command, tunnelworm_completion_command,
-        TunnelwormInvocation,
+        TunnelwormInvocation, parse_tunnelworm_cli, stderr_style, tunnelworm_command,
+        tunnelworm_completion_command,
     },
     persistent,
 };
@@ -27,7 +27,7 @@ async fn main() {
         Err(error) => {
             eprintln!("{} {error}", stderr_style().error("Error:"));
             std::process::exit(2);
-        },
+        }
     };
     let mut shell_exit_code: Option<u32> = None;
 
@@ -39,7 +39,8 @@ async fn main() {
             let name = command.get_name().to_string();
             let mut output = Vec::new();
             generate(shell, &mut command, name, &mut output);
-            let mut output = String::from_utf8(output).expect("completion output must be valid utf-8");
+            let mut output =
+                String::from_utf8(output).expect("completion output must be valid utf-8");
             if matches!(shell, clap_complete::Shell::Zsh) {
                 output = output.replace(
                     "compdef _tunnelworm tunnelworm",
@@ -55,7 +56,7 @@ async fn main() {
             } else {
                 Ok(())
             }
-        },
+        }
         TunnelwormInvocation::SelfUpdate => tunnelworm::self_update::run_self_update(),
         TunnelwormInvocation::Pipe(config) => persistent::run_named_pipe(&config).await,
         TunnelwormInvocation::PortsList(config) => persistent::list_tunnel_ports(&config),
@@ -66,10 +67,12 @@ async fn main() {
             Ok(code) => {
                 shell_exit_code = Some(code);
                 Ok(())
-            },
+            }
             Err(error) => Err(error),
         },
-        TunnelwormInvocation::TunnelCreate(config) => persistent::create_named_tunnel(&config).await,
+        TunnelwormInvocation::TunnelCreate(config) => {
+            persistent::create_named_tunnel(&config).await
+        }
         TunnelwormInvocation::TunnelUp(config) => persistent::up_named_tunnel(&config),
         TunnelwormInvocation::TunnelList => persistent::list_named_tunnels(),
         TunnelwormInvocation::TunnelStatus(config) => persistent::print_status(&config),

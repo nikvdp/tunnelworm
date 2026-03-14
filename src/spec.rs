@@ -77,7 +77,7 @@ impl LocalSpec {
                     remote_connect_port: Some(connect_port),
                     bind_interface: None,
                 })
-            },
+            }
             [bind_interface, listen_port, connect_host, connect_port] => {
                 let listen_port = parse_port(listen_port)?;
                 let connect_port = parse_port(connect_port)?;
@@ -92,7 +92,7 @@ impl LocalSpec {
                     remote_connect_port: Some(connect_port),
                     bind_interface: Some(canonical_host_token(bind_interface).to_string()),
                 })
-            },
+            }
             _ => Err(Error::Usage(
                 "ssh-style local specs must be [bind_address:]port:host:hostport".into(),
             )),
@@ -177,7 +177,7 @@ impl LocalSpec {
                             return Err(Error::Usage(
                                 "local spec only accepts remote-connect= and bind=".into(),
                             ));
-                        },
+                        }
                     }
                 }
                 Ok(Self {
@@ -186,7 +186,7 @@ impl LocalSpec {
                     remote_connect_port,
                     bind_interface,
                 })
-            },
+            }
         }
     }
 }
@@ -208,7 +208,7 @@ impl RemoteSpec {
                     remote_listen_port: Some(listen_port),
                     connect_address: Some(canonical_host_token(connect_host).to_string()),
                 })
-            },
+            }
             [bind_interface, listen_port, connect_host, connect_port] => {
                 let listen_port = parse_port(listen_port)?;
                 let connect_port = parse_port(connect_port)?;
@@ -223,7 +223,7 @@ impl RemoteSpec {
                     remote_listen_port: Some(listen_port),
                     connect_address: Some(canonical_host_token(connect_host).to_string()),
                 })
-            },
+            }
             _ => Err(Error::Usage(
                 "ssh-style remote specs must be [bind_address:]port:host:hostport".into(),
             )),
@@ -308,7 +308,7 @@ impl RemoteSpec {
                             return Err(Error::Usage(
                                 "remote spec only accepts listen= and address=".into(),
                             ));
-                        },
+                        }
                     }
                 }
                 Ok(Self {
@@ -317,7 +317,7 @@ impl RemoteSpec {
                     remote_listen_port,
                     connect_address,
                 })
-            },
+            }
         }
     }
 }

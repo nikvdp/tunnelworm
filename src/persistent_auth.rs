@@ -43,18 +43,17 @@ pub async fn authenticate(wormhole: &mut Wormhole, state: &mut PersistentState) 
     let peer_key = verifying_key_from_hex(&peer_challenge.public_key_hex)?;
     let peer_public_key_hex = hex::encode(peer_key.to_bytes());
 
-    if let Some(expected_peer) = &state.peer_public_key_hex {
-        if *expected_peer != peer_public_key_hex {
-            return Err(Error::Authentication(format!(
-                "persistent peer key mismatch: expected {}, got {}",
-                expected_peer, peer_public_key_hex
-            )));
-        }
+    if let Some(expected_peer) = &state.peer_public_key_hex
+        && *expected_peer != peer_public_key_hex
+    {
+        return Err(Error::Authentication(format!(
+            "persistent peer key mismatch: expected {}, got {}",
+            expected_peer, peer_public_key_hex
+        )));
     }
 
-    let peer_nonce = hex::decode(&peer_challenge.nonce_hex).map_err(|error| {
-        Error::Authentication(format!("invalid peer challenge nonce: {error}"))
-    })?;
+    let peer_nonce = hex::decode(&peer_challenge.nonce_hex)
+        .map_err(|error| Error::Authentication(format!("invalid peer challenge nonce: {error}")))?;
     let signature = signing_key.sign(&peer_nonce);
     let local_proof = AuthProof {
         public_key_hex: local_public_key_hex,
@@ -111,8 +110,7 @@ fn decode_fixed_hex<const N: usize>(input: &str, label: &str) -> Result<[u8; N]>
     bytes.try_into().map_err(|_| {
         Error::Authentication(format!(
             "{label} must be exactly {} bytes, got {}",
-            N,
-            actual_len
+            N, actual_len
         ))
     })
 }

@@ -18,9 +18,12 @@ fn send_file_control_request_round_trips_through_json() {
     match decoded {
         ControlRequest::SendFile { open } => {
             assert_eq!(open.source_name, "report.txt");
-            assert_eq!(open.destination_path.as_deref(), Some("/tmp/remote-report.txt"));
+            assert_eq!(
+                open.destination_path.as_deref(),
+                Some("/tmp/remote-report.txt")
+            );
             assert!(open.overwrite);
-        },
+        }
         other => panic!("decoded the wrong control request: {other:?}"),
     }
 }

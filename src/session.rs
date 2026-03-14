@@ -1,16 +1,15 @@
-use magic_wormhole::{
-    Code, MailboxConnection, Wormhole,
-    forwarding,
-    transit::{self, RelayHint},
-};
 use async_std::task;
 use futures::FutureExt;
+use magic_wormhole::{
+    Code, MailboxConnection, Wormhole, forwarding,
+    transit::{self, RelayHint},
+};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::time::Duration;
 
 use crate::{
-    cli::{stdout_style, TunnelConfig},
+    cli::{TunnelConfig, stdout_style},
     error::{Error, Result},
     forward::{self, CliIntent, ForwardEvent},
     persistent::PersistentState,
@@ -58,7 +57,9 @@ impl From<&TunnelConfig> for SessionOptions {
 
 fn app_config(mailbox: Option<&str>) -> magic_wormhole::AppConfig<forwarding::AppVersion> {
     match mailbox {
-        Some(mailbox) => forwarding::APP_CONFIG.clone().rendezvous_url(Cow::Owned(mailbox.to_string())),
+        Some(mailbox) => forwarding::APP_CONFIG
+            .clone()
+            .rendezvous_url(Cow::Owned(mailbox.to_string())),
         None => forwarding::APP_CONFIG.clone(),
     }
 }
@@ -113,7 +114,7 @@ pub async fn prepare_session(options: SessionOptions) -> Result<PreparedSession>
                 },
             };
             (mailbox_connection, false)
-        },
+        }
         None => {
             let mailbox_connection = MailboxConnection::create(config, options.code_length)
                 .await
@@ -124,7 +125,7 @@ pub async fn prepare_session(options: SessionOptions) -> Result<PreparedSession>
                     ))
                 })?;
             (mailbox_connection, true)
-        },
+        }
     };
 
     let welcome = mailbox_connection.welcome().map(ToOwned::to_owned);
@@ -259,7 +260,7 @@ pub async fn run_one_off(config: TunnelConfig) -> Result<()> {
                 connect_host,
                 connect_port
             );
-        },
+        }
     })
     .await
 }

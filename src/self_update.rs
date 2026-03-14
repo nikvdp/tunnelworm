@@ -1,6 +1,5 @@
 use std::{
-    env,
-    fs,
+    env, fs,
     io::{self, Cursor, Write},
     path::{Path, PathBuf},
 };
@@ -35,7 +34,8 @@ pub fn run_self_update() -> Result<()> {
     let asset_name = release_asset_name()?;
     let api_root = env::var("TUNNELWORM_UPDATE_API_ROOT")
         .unwrap_or_else(|_| DEFAULT_UPDATE_API_ROOT.to_string());
-    let repo = env::var("TUNNELWORM_UPDATE_REPO").unwrap_or_else(|_| DEFAULT_UPDATE_REPO.to_string());
+    let repo =
+        env::var("TUNNELWORM_UPDATE_REPO").unwrap_or_else(|_| DEFAULT_UPDATE_REPO.to_string());
     let current_exe = env::current_exe()?;
     let current_dir = current_exe.parent().ok_or_else(|| {
         Error::Update(format!(
@@ -109,7 +109,10 @@ fn fetch_latest_release(api_root: &str, repo: &str) -> Result<ReleaseResponse> {
     let url = format!("{api_root}/repos/{repo}/releases/latest");
     let response = client
         .get(&url)
-        .header("User-Agent", format!("tunnelworm/{}", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            format!("tunnelworm/{}", env!("CARGO_PKG_VERSION")),
+        )
         .send()?
         .error_for_status()?;
     Ok(response.json()?)
@@ -119,7 +122,10 @@ fn download_asset(url: &str) -> Result<Vec<u8>> {
     let client = Client::builder().build()?;
     let response = client
         .get(url)
-        .header("User-Agent", format!("tunnelworm/{}", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            format!("tunnelworm/{}", env!("CARGO_PKG_VERSION")),
+        )
         .send()?
         .error_for_status()?;
     Ok(response.bytes()?.to_vec())
@@ -139,7 +145,7 @@ fn unpack_release_asset(asset: &ReleaseAsset, bytes: &[u8]) -> Result<TempDir> {
         let mut archive = zip::ZipArchive::new(reader)?;
         for index in 0..archive.len() {
             let mut file = archive.by_index(index)?;
-            let Some(relative_path) = file.enclosed_name().map(PathBuf::from) else {
+            let Some(relative_path) = file.enclosed_name() else {
                 continue;
             };
             let destination = temp_dir.path().join(relative_path);
@@ -163,12 +169,8 @@ fn unpack_release_asset(asset: &ReleaseAsset, bytes: &[u8]) -> Result<TempDir> {
 }
 
 fn find_extracted_binary(root: &Path, file_name: &str) -> Result<PathBuf> {
-    find_extracted_optional_binary(root, file_name)?.ok_or_else(|| {
-        Error::Update(format!(
-            "release archive did not contain {:?}",
-            file_name
-        ))
-    })
+    find_extracted_optional_binary(root, file_name)?
+        .ok_or_else(|| Error::Update(format!("release archive did not contain {:?}", file_name)))
 }
 
 fn find_extracted_optional_binary(root: &Path, file_name: &str) -> Result<Option<PathBuf>> {
@@ -225,7 +227,7 @@ fn replace_sibling_binary(target: &Path, source: &Path) -> Result<()> {
             }
             fs::rename(&temp_target, target)?;
             Ok(())
-        },
+        }
     }
 }
 

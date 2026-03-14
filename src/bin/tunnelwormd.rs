@@ -74,7 +74,11 @@ fn parse_args() -> Args {
 struct Args {
     #[arg(long = "mailbox", help = "Override the mailbox websocket URL")]
     mailbox: Option<String>,
-    #[arg(long = "code-length", default_value_t = 2, help = "Default word count when `allocate-code` omits `code_length`")]
+    #[arg(
+        long = "code-length",
+        default_value_t = 2,
+        help = "Default word count when `allocate-code` omits `code_length`"
+    )]
     code_length: usize,
     #[arg(long = "persistent-state", hide = true)]
     persistent_state: Option<PathBuf>,

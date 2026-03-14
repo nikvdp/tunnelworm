@@ -66,11 +66,11 @@ impl StatusLine {
             StatusStream::Stdout => {
                 let mut handle = io::stdout().lock();
                 handle.write_all(value.as_bytes())
-            },
+            }
             StatusStream::Stderr => {
                 let mut handle = io::stderr().lock();
                 handle.write_all(value.as_bytes())
-            },
+            }
         }
     }
 

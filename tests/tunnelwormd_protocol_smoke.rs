@@ -34,8 +34,7 @@ impl DaemonHarness {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
                 let line = line.expect("daemon stdout should be readable");
-                let event: Value =
-                    serde_json::from_str(&line).expect("daemon event should parse");
+                let event: Value = serde_json::from_str(&line).expect("daemon event should parse");
                 if event_tx.send(event).is_err() {
                     break;
                 }
@@ -77,11 +76,7 @@ impl DaemonHarness {
     }
 
     fn close(mut self) {
-        let _ = writeln!(
-            self.stdin,
-            "{}",
-            json!({"kind":"session-close"})
-        );
+        let _ = writeln!(self.stdin, "{}", json!({"kind":"session-close"}));
         let _ = self.stdin.flush();
         let _ = self.child.wait();
     }
@@ -106,7 +101,9 @@ fn start_echo_server(port: u16) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let listener =
             TcpListener::bind(("127.0.0.1", port)).expect("echo server should bind locally");
-        let (mut stream, _) = listener.accept().expect("echo server should accept one client");
+        let (mut stream, _) = listener
+            .accept()
+            .expect("echo server should accept one client");
         let mut reader = BufReader::new(
             stream
                 .try_clone()
@@ -125,9 +122,8 @@ fn start_echo_server(port: u16) -> thread::JoinHandle<()> {
 
 #[test]
 fn input_commands_round_trip_through_json() {
-    let decoded: InputCommand =
-        serde_json::from_str(r#"{"kind":"allocate-code","code_length":3}"#)
-            .expect("allocate-code should deserialize");
+    let decoded: InputCommand = serde_json::from_str(r#"{"kind":"allocate-code","code_length":3}"#)
+        .expect("allocate-code should deserialize");
     match decoded {
         InputCommand::AllocateCode { code_length } => assert_eq!(code_length, Some(3)),
         other => panic!("decoded the wrong input command: {other:?}"),
@@ -198,5 +194,7 @@ fn tunnelwormd_forwards_bytes_end_to_end() {
 
     allocator.close();
     joiner.close();
-    echo_server.join().expect("echo server should shut down cleanly");
+    echo_server
+        .join()
+        .expect("echo server should shut down cleanly");
 }

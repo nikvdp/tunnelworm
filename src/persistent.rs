@@ -12,14 +12,19 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, TunnelCapability, TunnelConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelPolicyEffect, TunnelPolicyRule, TunnelPortsAddConfig, TunnelPortsListConfig, TunnelPortsRemoveConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
-    control::{ControlResponse, add_port_forward_runtime, control_socket_path, echo_runtime, probe_runtime, remove_port_forward_runtime},
+    cli::{
+        TunnelCapability, TunnelConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelPolicyEffect,
+        TunnelPolicyRule, TunnelPortsAddConfig, TunnelPortsListConfig, TunnelPortsRemoveConfig,
+        TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig, stdout_style,
+    },
+    control::{
+        ControlResponse, add_port_forward_runtime, control_socket_path, echo_runtime,
+        probe_runtime, remove_port_forward_runtime,
+    },
     error::{Error, Result},
-    file_transfer,
-    pipe,
-    persistent_auth,
-    shell::{self, ShellOpen},
+    file_transfer, persistent_auth, pipe,
     session::{self, SessionOptions},
+    shell::{self, ShellOpen},
     spec::{LocalSpec, RemoteSpec},
     status_line::StatusLine,
 };
@@ -117,7 +122,8 @@ impl ManagedPortDefinition {
         }
         if remote_listen == remote_connect {
             return Err(Error::Usage(
-                "ports add needs exactly one remote half: --remote-listen or --remote-connect".into(),
+                "ports add needs exactly one remote half: --remote-listen or --remote-connect"
+                    .into(),
             ));
         }
 
@@ -218,7 +224,7 @@ fn policy_rule_applies(rule: TunnelCapability, capability: TunnelCapability) -> 
                 capability,
                 TunnelCapability::Ports | TunnelCapability::RemotePortMgmt
             )
-        },
+        }
         other => other == capability,
     }
 }
@@ -301,7 +307,9 @@ impl PersistentState {
 impl PersistentConfig {
     pub fn from_tunnel_config(config: &TunnelConfig) -> Result<Self> {
         let code = config.code.clone().ok_or_else(|| {
-            Error::Usage("persistent mode requires an explicit wormhole code on the joining side".into())
+            Error::Usage(
+                "persistent mode requires an explicit wormhole code on the joining side".into(),
+            )
         })?;
         Ok(Self::from_join_config(config, code))
     }
@@ -383,7 +391,10 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
                 tunnel_name
             )));
         }
-        println!("Overwriting existing persistent state at {}.", existing_path.display());
+        println!(
+            "Overwriting existing persistent state at {}.",
+            existing_path.display()
+        );
         fs::remove_file(existing_path)?;
     }
 
@@ -395,7 +406,8 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
         println!();
         let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
         let prepared = session::prepare_session(SessionOptions::from(config)).await?;
-        let mut connected = connect_with_spinner(prepared, "waiting for the persistent peer...").await?;
+        let mut connected =
+            connect_with_spinner(prepared, "waiting for the persistent peer...").await?;
         session::authenticate_persistent_peer(&mut connected, &mut state).await?;
         save_state(&state_path, &state)?;
         println!("{} starting tunnel...", style.status("Status:"));
@@ -418,7 +430,10 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
                     "explicit persistent state does not match this creator command",
                 ));
             }
-            println!("Overwriting existing persistent state at {}.", path.display());
+            println!(
+                "Overwriting existing persistent state at {}.",
+                path.display()
+            );
             fs::remove_file(path)?;
         }
     } else if let Some((state_path, state)) = find_existing_creator_state(&cwd, config)? {
@@ -429,7 +444,10 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
             println!("{} starting tunnel...", style.status("Status:"));
             return exec_persistent_daemon(&state_path);
         }
-        println!("Overwriting existing persistent state at {}.", state_path.display());
+        println!(
+            "Overwriting existing persistent state at {}.",
+            state_path.display()
+        );
         fs::remove_file(&state_path)?;
     }
 
@@ -440,7 +458,8 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
     print_state_block(&style, config, &state_path, &prepared.code);
     println!();
     let mut state = PersistentState::new(expected, persistent_auth::generate_identity());
-    let mut connected = connect_with_spinner(prepared, "waiting for the persistent peer...").await?;
+    let mut connected =
+        connect_with_spinner(prepared, "waiting for the persistent peer...").await?;
     session::authenticate_persistent_peer(&mut connected, &mut state).await?;
     save_state(&state_path, &state)?;
     println!("{} starting tunnel...", style.status("Status:"));
@@ -471,7 +490,8 @@ async fn connect_with_spinner(
 pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, state) = resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, state) =
+        resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
     let replay_config = TunnelConfig {
         tunnel_name: Some(state.config.name.clone()),
         mailbox: state.config.mailbox.clone(),
@@ -483,7 +503,12 @@ pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
         state: Some(state_path.clone()),
         overwrite: false,
     };
-    print_tunnel_intro(&style, "Persistent reuse:", &state.config.code, &replay_config);
+    print_tunnel_intro(
+        &style,
+        "Persistent reuse:",
+        &state.config.code,
+        &replay_config,
+    );
     print_state_block(&style, &replay_config, &state_path, &state.config.code);
     println!();
     println!("{} starting tunnel...", style.status("Status:"));
@@ -505,8 +530,16 @@ pub fn list_named_tunnels() -> Result<()> {
         let runtime = current_tunnel_runtime(&state_path)?;
         println!();
         println!("  {}", style.label(&state.config.name));
-        println!("    {} {}", style.label("role:"), local_forward_role_label(&state.config));
-        println!("    {} {}", style.label("endpoint:"), local_endpoint_label(&state.config));
+        println!(
+            "    {} {}",
+            style.label("role:"),
+            local_forward_role_label(&state.config)
+        );
+        println!(
+            "    {} {}",
+            style.label("endpoint:"),
+            local_endpoint_label(&state.config)
+        );
         println!("    {} {}", style.label("state:"), runtime.label());
         if let Some(detail) = runtime.detail() {
             println!("    {} {}", style.label("detail:"), detail);
@@ -523,27 +556,51 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     let (state_path, state) =
         resolve_status_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
 
-    println!("{} {}", style.heading("Persistent state:"), state.config.name);
-    println!("{} {}", style.heading("Local:"), local_forward_role_label(&state.config));
+    println!(
+        "{} {}",
+        style.heading("Persistent state:"),
+        state.config.name
+    );
+    println!(
+        "{} {}",
+        style.heading("Local:"),
+        local_forward_role_label(&state.config)
+    );
     println!();
     println!("{}", style.heading("State"));
     println!("  {} {}", style.label("name:"), state.config.name);
     println!("  {}", style.label("file:"));
     println!("    {}", state_path.display());
-    println!("  {} tunnelworm tunnel up {}", style.label("reuse:"), state.config.name);
+    println!(
+        "  {} tunnelworm tunnel up {}",
+        style.label("reuse:"),
+        state.config.name
+    );
     println!(
         "  {} tunnelworm tunnel delete {}",
         style.label("delete:"),
         state.config.name
     );
-    println!("  {} {}", style.label("bootstrap:"), bootstrap_role_label(state.config.role));
-    println!("  {} {}", style.label("endpoint:"), local_endpoint_label(&state.config));
+    println!(
+        "  {} {}",
+        style.label("bootstrap:"),
+        bootstrap_role_label(state.config.role)
+    );
+    println!(
+        "  {} {}",
+        style.label("endpoint:"),
+        local_endpoint_label(&state.config)
+    );
     let runtime = current_tunnel_runtime(&state_path)?;
     println!("  {} {}", style.label("state:"), runtime.label());
     if let Some(detail) = runtime.detail() {
         println!("  {} {}", style.label("detail:"), detail);
     }
-    println!("  {} {}", style.label("control:"), control_socket_path(&state_path).display());
+    println!(
+        "  {} {}",
+        style.label("control:"),
+        control_socket_path(&state_path).display()
+    );
     println!(
         "  {} {}",
         style.label("mailbox:"),
@@ -604,12 +661,14 @@ pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
     wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
-    if let Some(ControlResponse::Probe { peer_policy_rules, .. }) = probe_runtime(&state_path)? {
-        if !capability_allowed(&peer_policy_rules, TunnelCapability::Pipe) {
-            return Err(Error::Session(
-                "the remote tunnel policy denies pipe".into(),
-            ));
-        }
+    if let Some(ControlResponse::Probe {
+        peer_policy_rules, ..
+    }) = probe_runtime(&state_path)?
+        && !capability_allowed(&peer_policy_rules, TunnelCapability::Pipe)
+    {
+        return Err(Error::Session(
+            "the remote tunnel policy denies pipe".into(),
+        ));
     }
     let mode = pipe::infer_pipe_mode(config.mode)?;
     pipe::run_pipe(&state_path, mode).await
@@ -624,13 +683,14 @@ pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
     wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
-    let mut stream = async_std::os::unix::net::UnixStream::connect(control_socket_path(&state_path))
-        .await
-        .map_err(|error| {
-            Error::Session(format!(
-                "could not connect to the local tunnel control socket: {error}"
-            ))
-        })?;
+    let mut stream =
+        async_std::os::unix::net::UnixStream::connect(control_socket_path(&state_path))
+            .await
+            .map_err(|error| {
+                Error::Session(format!(
+                    "could not connect to the local tunnel control socket: {error}"
+                ))
+            })?;
     let (rows, cols) = shell::current_terminal_size();
     let request = serde_json::to_string(&crate::control::ControlRequest::Shell {
         open: ShellOpen {
@@ -648,7 +708,8 @@ pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
 pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, state, correction) = resolve_live_tunnel_handle(None, Some(&config.name), &cwd)?;
+    let (state_path, state, correction) =
+        resolve_live_tunnel_handle(None, Some(&config.name), &cwd)?;
     if let Some(correction) = correction {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
@@ -721,11 +782,7 @@ pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
         result.path,
         human_bytes(result.bytes)
     );
-    println!(
-        "{} {}",
-        style.label("Tunnel:"),
-        state.config.name
-    );
+    println!("{} {}", style.label("Tunnel:"), state.config.name);
     Ok(())
 }
 
@@ -738,13 +795,11 @@ fn parse_port_endpoint(input: &str, flag: &str) -> Result<(String, u16)> {
     }
 
     let (host, port) = input.split_once(':').ok_or_else(|| {
-        Error::Usage(format!(
-            "{flag} must be a port or host:port, got {input:?}"
-        ))
+        Error::Usage(format!("{flag} must be a port or host:port, got {input:?}"))
     })?;
-    let port = port.parse::<u16>().map_err(|_| {
-        Error::Usage(format!("{flag} must end with a valid port, got {input:?}"))
-    })?;
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| Error::Usage(format!("{flag} must end with a valid port, got {input:?}")))?;
     if port == 0 {
         return Err(Error::Usage(format!("{flag} must be between 1 and 65535")));
     }
@@ -760,28 +815,28 @@ fn build_managed_port_definition(config: &TunnelPortsAddConfig) -> Result<Manage
         Some(value) => {
             let (host, port) = parse_port_endpoint(value, "--local-listen")?;
             (Some(host), Some(port))
-        },
+        }
         None => (None, None),
     };
     let (local_connect_host, local_connect_port) = match config.local_connect.as_deref() {
         Some(value) => {
             let (host, port) = parse_port_endpoint(value, "--local-connect")?;
             (Some(host), Some(port))
-        },
+        }
         None => (None, None),
     };
     let (remote_listen_host, remote_listen_port) = match config.remote_listen.as_deref() {
         Some(value) => {
             let (host, port) = parse_port_endpoint(value, "--remote-listen")?;
             (Some(host), Some(port))
-        },
+        }
         None => (None, None),
     };
     let (remote_connect_host, remote_connect_port) = match config.remote_connect.as_deref() {
         Some(value) => {
             let (host, port) = parse_port_endpoint(value, "--remote-connect")?;
             (Some(host), Some(port))
-        },
+        }
         None => (None, None),
     };
     let definition = ManagedPortDefinition {
@@ -863,7 +918,10 @@ pub async fn remove_tunnel_port(config: &TunnelPortsRemoveConfig) -> Result<()> 
     Ok(())
 }
 
-fn find_existing_creator_state(cwd: &Path, config: &TunnelConfig) -> Result<Option<(PathBuf, PersistentState)>> {
+fn find_existing_creator_state(
+    cwd: &Path,
+    config: &TunnelConfig,
+) -> Result<Option<(PathBuf, PersistentState)>> {
     let mut matches = Vec::new();
     for dir in [project_state_dir(cwd), user_state_dir()?] {
         if !dir.exists() {
@@ -926,7 +984,7 @@ fn resolve_status_state(
     resolve_named_state(explicit, name, cwd).map_err(|error| match error {
         Error::PersistentState(message) if message.contains("tunnel up needs either") => {
             Error::PersistentState("tunnel status needs either a tunnel name or --state".into())
-        },
+        }
         other => other,
     })
 }
@@ -1013,28 +1071,26 @@ async fn wait_for_live_tunnel_ready(state_path: &Path, handle: Option<&str>) -> 
                         .and_then(|name| name.to_str())
                         .unwrap_or("tunnel")
                 });
-                return Err(Error::Session(format!(
-                    "tunnel {target:?} is not running"
-                )));
-            },
+                return Err(Error::Session(format!("tunnel {target:?} is not running")));
+            }
             ResolvedTunnelRuntime::Live(status) => {
                 match echo_runtime(state_path, probe_payload).await {
                     Ok(Some(payload)) if payload == probe_payload => {
                         spinner.clear()?;
                         return Ok(());
-                    },
-                    Ok(Some(_)) | Ok(None) | Err(Error::Session(_)) => {},
+                    }
+                    Ok(Some(_)) | Ok(None) | Err(Error::Session(_)) => {}
                     Err(error) => {
                         spinner.clear()?;
                         return Err(error);
-                    },
+                    }
                 }
-                let detail = status.detail.unwrap_or_else(|| {
-                    "waiting for the tunnel to become ready...".into()
-                });
+                let detail = status
+                    .detail
+                    .unwrap_or_else(|| "waiting for the tunnel to become ready...".into());
                 spinner.update(&style.status("Status:"), &detail)?;
                 async_std::task::sleep(std::time::Duration::from_millis(125)).await;
-            },
+            }
         }
     }
 }
@@ -1048,7 +1104,10 @@ fn find_live_temporary_state_by_code(
         if !state.config.temporary || state.config.code != code {
             continue;
         }
-        if matches!(current_tunnel_runtime(&state_path)?, ResolvedTunnelRuntime::Stopped) {
+        if matches!(
+            current_tunnel_runtime(&state_path)?,
+            ResolvedTunnelRuntime::Stopped
+        ) {
             continue;
         }
         matches.push((state_path, state));
@@ -1151,7 +1210,7 @@ fn persistent_worker_running(state_path: &Path) -> Result<bool> {
         Ok(()) => {
             lock_file.unlock()?;
             Ok(false)
-        },
+        }
         Err(_) => Ok(true),
     }
 }
@@ -1213,8 +1272,15 @@ pub fn save_state(path: &Path, state: &PersistentState) -> Result<()> {
 
 pub fn state_file_name(config: &PersistentConfig) -> Result<String> {
     let slug = slugify_tunnel_name(&config.name);
-    let fingerprint = serde_json::to_vec(&(&config.name, &config.mailbox, &config.locals, &config.remotes))
-        .map_err(|error| Error::PersistentState(format!("could not fingerprint state config: {error}")))?;
+    let fingerprint = serde_json::to_vec(&(
+        &config.name,
+        &config.mailbox,
+        &config.locals,
+        &config.remotes,
+    ))
+    .map_err(|error| {
+        Error::PersistentState(format!("could not fingerprint state config: {error}"))
+    })?;
     Ok(format!("{slug}--{:016x}.json", fnv1a64(&fingerprint)))
 }
 
@@ -1226,7 +1292,9 @@ pub fn user_state_dir() -> Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         let base = env::var_os("APPDATA").ok_or_else(|| {
-            Error::PersistentState("APPDATA is not set; cannot resolve the user state directory".into())
+            Error::PersistentState(
+                "APPDATA is not set; cannot resolve the user state directory".into(),
+            )
         })?;
         return Ok(PathBuf::from(base).join("tunnelworm"));
     }
@@ -1234,12 +1302,14 @@ pub fn user_state_dir() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = env::var_os("HOME").ok_or_else(|| {
-            Error::PersistentState("HOME is not set; cannot resolve the user state directory".into())
+            Error::PersistentState(
+                "HOME is not set; cannot resolve the user state directory".into(),
+            )
         })?;
-        return Ok(PathBuf::from(home)
+        Ok(PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("tunnelworm"));
+            .join("tunnelworm"))
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -1248,9 +1318,14 @@ pub fn user_state_dir() -> Result<PathBuf> {
             return Ok(PathBuf::from(xdg_state_home).join("tunnelworm"));
         }
         let home = env::var_os("HOME").ok_or_else(|| {
-            Error::PersistentState("HOME is not set; cannot resolve the user state directory".into())
+            Error::PersistentState(
+                "HOME is not set; cannot resolve the user state directory".into(),
+            )
         })?;
-        Ok(PathBuf::from(home).join(".local").join("state").join("tunnelworm"))
+        Ok(PathBuf::from(home)
+            .join(".local")
+            .join("state")
+            .join("tunnelworm"))
     }
 }
 
@@ -1317,10 +1392,7 @@ fn local_forward_role_label(config: &PersistentConfig) -> &'static str {
 
 fn local_endpoint_label(config: &PersistentConfig) -> String {
     if let Some(local) = config.locals.first() {
-        let host = local
-            .bind_interface
-            .as_deref()
-            .unwrap_or("127.0.0.1");
+        let host = local.bind_interface.as_deref().unwrap_or("127.0.0.1");
         let port = local
             .local_listen_port
             .map(|port| port.to_string())
@@ -1329,10 +1401,7 @@ fn local_endpoint_label(config: &PersistentConfig) -> String {
     }
 
     if let Some(remote) = config.remotes.first() {
-        let host = remote
-            .connect_address
-            .as_deref()
-            .unwrap_or("127.0.0.1");
+        let host = remote.connect_address.as_deref().unwrap_or("127.0.0.1");
         let port = remote
             .local_connect_port
             .map(|port| port.to_string())
@@ -1456,7 +1525,7 @@ fn exec_persistent_daemon(state_path: &Path) -> Result<()> {
     {
         use std::os::unix::process::CommandExt;
 
-        return Err(Error::Io(command.exec()));
+        Err(Error::Io(command.exec()))
     }
 
     #[cfg(not(unix))]
@@ -1542,12 +1611,8 @@ mod tests {
         fixture.write_live_state("tmp-connect-one", "9-regression-ambiguous");
         fixture.write_live_state("tmp-listen-two", "9-regression-ambiguous");
 
-        let error = resolve_live_tunnel_handle(
-            None,
-            Some("9-regression-ambiguous"),
-            fixture.cwd(),
-        )
-        .expect_err("ambiguous code should fail");
+        let error = resolve_live_tunnel_handle(None, Some("9-regression-ambiguous"), fixture.cwd())
+            .expect_err("ambiguous code should fail");
 
         assert!(
             error
@@ -1598,9 +1663,8 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("clock should be valid")
                 .as_nanos();
-            let root = std::env::temp_dir().join(format!(
-                "tunnelworm-persistent-test-{label}-{unique}"
-            ));
+            let root =
+                std::env::temp_dir().join(format!("tunnelworm-persistent-test-{label}-{unique}"));
             let cwd = root.join("cwd");
             fs::create_dir_all(project_state_dir(&cwd)).expect("project state dir should exist");
             Self {
@@ -1632,9 +1696,8 @@ mod tests {
                 policy_rules: Vec::new(),
             };
             let state = PersistentState::new(config.clone(), persistent_auth::generate_identity());
-            let path = project_state_dir(&self.cwd).join(
-                state_file_name(&config).expect("state file name should render"),
-            );
+            let path = project_state_dir(&self.cwd)
+                .join(state_file_name(&config).expect("state file name should render"));
             save_state(&path, &state).expect("state should save");
             fs::write(
                 runtime_status_path(&path),
@@ -1649,6 +1712,7 @@ mod tests {
                 .create(true)
                 .read(true)
                 .write(true)
+                .truncate(false)
                 .open(path.with_extension("lock"))
                 .expect("lock file should open");
             lock.try_lock_exclusive()

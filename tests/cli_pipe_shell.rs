@@ -1,7 +1,7 @@
 use clap::Parser;
 use tunnelworm::cli::{
-    tunnelworm_command, TunnelPipeConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelwormCli,
-    TunnelwormInvocation,
+    TunnelPipeConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelwormCli, TunnelwormInvocation,
+    tunnelworm_command,
 };
 
 fn render_long_help() -> String {
@@ -25,9 +25,7 @@ fn top_level_help_mentions_pipe_and_shell_rules() {
     assert!(help.contains(
         "tunnelworm send-file` writes into the peer's working directory unless you pass a remote path"
     ));
-    assert!(help.contains(
-        "Without `--command`, `tunnelworm shell` starts the remote login shell"
-    ));
+    assert!(help.contains("Without `--command`, `tunnelworm shell` starts the remote login shell"));
 }
 
 #[test]
@@ -77,7 +75,7 @@ fn parses_pipe_send_mode_and_name() {
         TunnelwormInvocation::Pipe(TunnelPipeConfig { name, mode, .. }) => {
             assert_eq!(name.as_deref(), Some("office-ssh"));
             assert!(matches!(mode, Some(tunnelworm::pipe::PipeMode::Send)));
-        },
+        }
         other => panic!("expected pipe invocation, got {other:?}"),
     }
 }
@@ -92,7 +90,8 @@ fn parses_send_file_alias_name_and_destination() {
         "/tmp/inbox/report.txt",
         "--overwrite",
     ]);
-    let invocation = TunnelwormInvocation::try_from(cli).expect("send-file invocation should parse");
+    let invocation =
+        TunnelwormInvocation::try_from(cli).expect("send-file invocation should parse");
     match invocation {
         TunnelwormInvocation::SendFile(TunnelSendFileConfig {
             name,
@@ -107,26 +106,20 @@ fn parses_send_file_alias_name_and_destination() {
                 Some(std::path::PathBuf::from("/tmp/inbox/report.txt"))
             );
             assert!(overwrite);
-        },
+        }
         other => panic!("expected send-file invocation, got {other:?}"),
     }
 }
 
 #[test]
 fn parses_shell_command_and_name() {
-    let cli = TunnelwormCli::parse_from([
-        "tunnelworm",
-        "shell",
-        "office-ssh",
-        "--command",
-        "pwd",
-    ]);
+    let cli = TunnelwormCli::parse_from(["tunnelworm", "shell", "office-ssh", "--command", "pwd"]);
     let invocation = TunnelwormInvocation::try_from(cli).expect("shell invocation should parse");
     match invocation {
         TunnelwormInvocation::Shell(TunnelShellConfig { name, command, .. }) => {
             assert_eq!(name.as_deref(), Some("office-ssh"));
             assert_eq!(command.as_deref(), Some("pwd"));
-        },
+        }
         other => panic!("expected shell invocation, got {other:?}"),
     }
 }

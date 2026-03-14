@@ -22,7 +22,7 @@ fn main() -> Result<()> {
         "--help" | "-h" | "help" => {
             print_usage();
             Ok(())
-        },
+        }
         other => Err(format!("unknown xtask command: {other}").into()),
     }
 }
@@ -37,14 +37,14 @@ fn release(args: Vec<String>) -> Result<()> {
             "--help" | "-h" => {
                 print_release_usage();
                 return Ok(());
-            },
+            }
             _ if requested_version.is_none() => requested_version = Some(arg),
             _ => {
                 return Err(format!(
                     "unexpected argument {arg:?}; expected only an optional version and --dry-run"
                 )
-                .into())
-            },
+                .into());
+            }
         }
     }
 
@@ -69,7 +69,11 @@ fn release(args: Vec<String>) -> Result<()> {
     let updated_cargo_toml = update_root_package_version(&cargo_toml, &next_version)?;
     let updated_cargo_lock = if cargo_lock_path.exists() {
         let cargo_lock = fs::read_to_string(&cargo_lock_path)?;
-        Some(update_lockfile_version(&cargo_lock, "tunnelworm", &next_version)?)
+        Some(update_lockfile_version(
+            &cargo_lock,
+            "tunnelworm",
+            &next_version,
+        )?)
     } else {
         None
     };
@@ -103,7 +107,10 @@ fn release(args: Vec<String>) -> Result<()> {
 
     run_git(&repo_root, &["add", "Cargo.toml", "Cargo.lock"])?;
     run_git(&repo_root, &["commit", "-m", &format!("Release {tag}")])?;
-    run_git(&repo_root, &["tag", "-a", &tag, "-m", &format!("Release {tag}")])?;
+    run_git(
+        &repo_root,
+        &["tag", "-a", &tag, "-m", &format!("Release {tag}")],
+    )?;
 
     println!("Created release {tag}");
     println!();
@@ -212,7 +219,11 @@ fn update_root_package_version(cargo_toml: &str, next_version: &str) -> Result<S
     Ok(document.to_string())
 }
 
-fn update_lockfile_version(cargo_lock: &str, package_name: &str, next_version: &str) -> Result<String> {
+fn update_lockfile_version(
+    cargo_lock: &str,
+    package_name: &str,
+    next_version: &str,
+) -> Result<String> {
     let mut document = cargo_lock.parse::<DocumentMut>()?;
     let packages = document["package"]
         .as_array_of_tables_mut()

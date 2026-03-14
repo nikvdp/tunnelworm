@@ -1,9 +1,4 @@
-use std::{
-    io::IsTerminal,
-    sync::mpsc,
-    thread,
-    time::Duration,
-};
+use std::{io::IsTerminal, sync::mpsc, thread, time::Duration};
 
 use async_channel::Sender;
 use async_std::{
@@ -38,10 +33,7 @@ pub enum ShellPacket {
     Error { message: String },
 }
 
-pub async fn bridge_local_shell_stream(
-    stream: UnixStream,
-    channel: MuxChannel,
-) -> Result<()> {
+pub async fn bridge_local_shell_stream(stream: UnixStream, channel: MuxChannel) -> Result<()> {
     let mut reader = stream.clone();
     let mut writer = stream;
     let send_channel = channel.clone();
@@ -287,7 +279,7 @@ where
 {
     let mut len = [0u8; 4];
     match reader.read_exact(&mut len).await {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(error) => return Err(error.into()),
     }
@@ -338,7 +330,7 @@ fn spawn_shell_writer(
                     if pty_writer.write_all(&data).is_err() || pty_writer.flush().is_err() {
                         break;
                     }
-                },
+                }
                 WriterCommand::Close => break,
             }
         }
@@ -355,14 +347,15 @@ fn spawn_shell_reader(
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
-                    let _ = event_tx.send_blocking(ShellRuntimeEvent::Output(buffer[..read].to_vec()));
-                },
+                    let _ =
+                        event_tx.send_blocking(ShellRuntimeEvent::Output(buffer[..read].to_vec()));
+                }
                 Err(error) => {
                     let _ = event_tx.send_blocking(ShellRuntimeEvent::Error(format!(
                         "could not read from the remote PTY: {error}"
                     )));
                     break;
-                },
+                }
             }
         }
     });
@@ -378,12 +371,12 @@ fn spawn_shell_waiter(
                 code: status.exit_code(),
                 signal: status.signal().map(ToOwned::to_owned),
             });
-        },
+        }
         Err(error) => {
             let _ = event_tx.send_blocking(ShellRuntimeEvent::Error(format!(
                 "could not wait for the remote shell: {error}"
             )));
-        },
+        }
     });
 }
 
@@ -396,16 +389,16 @@ fn spawn_local_stdin(sender: Sender<Option<Vec<u8>>>) {
                 Ok(0) => {
                     let _ = sender.send_blocking(None);
                     break;
-                },
+                }
                 Ok(read) => {
                     if sender.send_blocking(Some(buffer[..read].to_vec())).is_err() {
                         break;
                     }
-                },
+                }
                 Err(_) => {
                     let _ = sender.send_blocking(None);
                     break;
-                },
+                }
             }
         }
     });
@@ -415,8 +408,9 @@ struct RawModeGuard;
 
 impl RawModeGuard {
     fn enable() -> Result<Self> {
-        enable_raw_mode()
-            .map_err(|error| Error::Session(format!("could not enable raw terminal mode: {error}")))?;
+        enable_raw_mode().map_err(|error| {
+            Error::Session(format!("could not enable raw terminal mode: {error}"))
+        })?;
         Ok(Self)
     }
 }
