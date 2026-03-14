@@ -15,6 +15,7 @@ use crate::{
     control::{ControlResponse, ControlServer, RuntimeControlRequest},
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
+    file_transfer::{self, FileTransferOpen, FileTransferPacket, bridge_local_file_stream, run_remote_receive, write_stream_packet as write_file_stream_packet},
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
     mux::{ChannelKind, IncomingChannel, MuxSession, MuxTransport},
     pipe::PipeMode,
@@ -281,6 +282,27 @@ async fn handle_incoming_channel(
                     let _ = send_channel_packet(
                         &incoming.channel,
                         &ShellPacket::Error {
+                            message: error.to_string(),
+                        },
+                    )
+                    .await;
+                    let _ = incoming.channel.close().await;
+                }
+            });
+            Ok(())
+        },
+        ChannelKind::FileTransfer => {
+            let open: FileTransferOpen = serde_json::from_slice(&incoming.open_payload)?;
+            let base_dir = std::env::current_dir().map_err(|error| {
+                Error::Session(format!("could not resolve the remote working directory: {error}"))
+            })?;
+            task::spawn(async move {
+                if let Err(error) =
+                    run_remote_receive(incoming.channel.clone(), open, base_dir).await
+                {
+                    let _ = file_transfer::send_channel_packet(
+                        &incoming.channel,
+                        &FileTransferPacket::Error {
                             message: error.to_string(),
                         },
                     )
@@ -575,6 +597,39 @@ async fn handle_runtime_control_request(
                     write_stream_packet(
                         &mut stream,
                         &ShellPacket::Error {
+                            message: error.to_string(),
+                        },
+                    )
+                    .await?;
+                },
+            }
+        },
+        RuntimeControlRequest::SendFile { open, stream } => {
+            let Some(session) = session else {
+                let mut stream = stream;
+                write_file_stream_packet(
+                    &mut stream,
+                    &FileTransferPacket::Error {
+                        message: "the tunnel is not connected yet".into(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            };
+            match session
+                .open_channel(ChannelKind::FileTransfer, serde_json::to_vec(&open)?)
+                .await
+            {
+                Ok(channel) => {
+                    task::spawn(async move {
+                        let _ = bridge_local_file_stream(stream, channel).await;
+                    });
+                },
+                Err(error) => {
+                    let mut stream = stream;
+                    write_file_stream_packet(
+                        &mut stream,
+                        &FileTransferPacket::Error {
                             message: error.to_string(),
                         },
                     )

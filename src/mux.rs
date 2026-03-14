@@ -28,6 +28,7 @@ pub enum ChannelKind {
     Echo,
     Pipe,
     Shell,
+    FileTransfer,
 }
 
 #[derive(Debug, Clone)]
@@ -447,6 +448,7 @@ fn kind_code(kind: ChannelKind) -> u8 {
         ChannelKind::Echo => 1,
         ChannelKind::Pipe => 2,
         ChannelKind::Shell => 3,
+        ChannelKind::FileTransfer => 4,
     }
 }
 
@@ -456,6 +458,7 @@ fn decode_kind(code: u8) -> Result<ChannelKind> {
         1 => Ok(ChannelKind::Echo),
         2 => Ok(ChannelKind::Pipe),
         3 => Ok(ChannelKind::Shell),
+        4 => Ok(ChannelKind::FileTransfer),
         other => Err(Error::Session(format!(
             "received an unknown live tunnel channel kind {other}"
         ))),

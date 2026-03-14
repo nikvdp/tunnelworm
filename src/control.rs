@@ -12,6 +12,7 @@ use std::{
 
 use crate::{
     error::{Error, Result},
+    file_transfer::FileTransferOpen,
     pipe::PipeMode,
     persistent::{TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
     shell::ShellOpen,
@@ -24,6 +25,7 @@ pub enum ControlRequest {
     Echo { payload: String },
     Pipe { mode: PipeMode },
     Shell { open: ShellOpen },
+    SendFile { open: FileTransferOpen },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +59,10 @@ pub enum RuntimeControlRequest {
     },
     Shell {
         open: ShellOpen,
+        stream: async_std::os::unix::net::UnixStream,
+    },
+    SendFile {
+        open: FileTransferOpen,
         stream: async_std::os::unix::net::UnixStream,
     },
 }
@@ -195,6 +201,17 @@ async fn handle_stream(
                 .await
                 .map_err(|_| {
                     Error::Session("the local tunnel runtime is not accepting shell requests".into())
+                })?;
+            return Ok(());
+        },
+        Ok(ControlRequest::SendFile { open }) => {
+            requests
+                .send(RuntimeControlRequest::SendFile { open, stream })
+                .await
+                .map_err(|_| {
+                    Error::Session(
+                        "the local tunnel runtime is not accepting file transfer requests".into(),
+                    )
                 })?;
             return Ok(());
         },

@@ -2,6 +2,7 @@ pub mod cli;
 pub mod control;
 pub mod daemon;
 pub mod error;
+pub mod file_transfer;
 pub mod forward;
 pub mod mux;
 pub mod pipe;
