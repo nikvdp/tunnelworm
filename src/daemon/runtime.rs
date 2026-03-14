@@ -929,8 +929,10 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             eprintln!("{} peer connected", style.status("Status:"));
             eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
             runtime_status.write(TunnelRuntimeStatus {
-                phase: TunnelRuntimePhase::Up,
-                detail: Some(format!("peer connected; verifier {}", connected.verifier)),
+                phase: TunnelRuntimePhase::Starting,
+                detail: Some(format!(
+                    "peer connected; bringing the live tunnel up..."
+                )),
             })?;
             session::authenticate_persistent_peer(&mut connected, &mut state).await?;
 
@@ -952,6 +954,10 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             {
                 *live_session.lock().expect("live session mutex poisoned") = Some(mux_session.clone());
             }
+            runtime_status.write(TunnelRuntimeStatus {
+                phase: TunnelRuntimePhase::Up,
+                detail: Some("peer connected; live tunnel ready".into()),
+            })?;
             let incoming_task = task::spawn(drive_incoming_channels(
                 mux_session.clone(),
                 pipe_broker.clone(),
@@ -1047,8 +1053,8 @@ async fn run_temporary_tunnel(
     eprintln!("{} peer connected", style.status("Status:"));
     eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
     runtime_status.write(TunnelRuntimeStatus {
-        phase: TunnelRuntimePhase::Up,
-        detail: Some(format!("peer connected; verifier {}", connected.verifier)),
+        phase: TunnelRuntimePhase::Starting,
+        detail: Some("peer connected; bringing the live tunnel up...".into()),
     })?;
 
     let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, intent).await?;
@@ -1070,6 +1076,10 @@ async fn run_temporary_tunnel(
     {
         *live_session.lock().expect("live session mutex poisoned") = Some(mux_session.clone());
     }
+    runtime_status.write(TunnelRuntimeStatus {
+        phase: TunnelRuntimePhase::Up,
+        detail: Some("peer connected; live tunnel ready".into()),
+    })?;
     let incoming_task = task::spawn(drive_incoming_channels(
         mux_session.clone(),
         pipe_broker.clone(),

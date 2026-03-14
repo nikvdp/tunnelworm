@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cli::{stdout_style, TunnelConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
-    control::{ControlResponse, control_socket_path, probe_runtime},
+    control::{ControlResponse, control_socket_path, echo_runtime, probe_runtime},
     error::{Error, Result},
     file_transfer,
     pipe,
@@ -405,16 +405,26 @@ pub fn delete_named_tunnel(config: &TunnelDeleteConfig) -> Result<()> {
 
 pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
     let cwd = env::current_dir()?;
-    let (state_path, _state) =
-        resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let style = stdout_style();
+    let (state_path, _state, correction) =
+        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    if let Some(correction) = correction {
+        println!("{} {correction}", style.label("Resolved:"));
+    }
+    wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
     let mode = pipe::infer_pipe_mode(config.mode)?;
     pipe::run_pipe(&state_path, mode).await
 }
 
 pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
     let cwd = env::current_dir()?;
-    let (state_path, _state) =
-        resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let style = stdout_style();
+    let (state_path, _state, correction) =
+        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    if let Some(correction) = correction {
+        println!("{} {correction}", style.label("Resolved:"));
+    }
+    wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
     let mut stream = async_std::os::unix::net::UnixStream::connect(control_socket_path(&state_path))
         .await
         .map_err(|error| {
@@ -438,7 +448,12 @@ pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
 
 pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
     let cwd = env::current_dir()?;
-    let (state_path, state) = resolve_named_state(None, Some(&config.name), &cwd)?;
+    let style = stdout_style();
+    let (state_path, state, correction) = resolve_live_tunnel_handle(None, Some(&config.name), &cwd)?;
+    if let Some(correction) = correction {
+        println!("{} {correction}", style.label("Resolved:"));
+    }
+    wait_for_live_tunnel_ready(&state_path, Some(&config.name)).await?;
     let source_path = if config.source.is_absolute() {
         config.source.clone()
     } else {
@@ -459,7 +474,6 @@ pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
                 "could not connect to the local tunnel control socket: {error}"
             ))
         })?;
-    let style = stdout_style();
     let mut status = StatusLine::stdout();
     let source_label = source_path
         .file_name()
@@ -615,6 +629,106 @@ fn resolve_named_state(
             name, name
         ))
     })
+}
+
+fn resolve_live_tunnel_handle(
+    explicit: Option<&Path>,
+    handle: Option<&str>,
+    cwd: &Path,
+) -> Result<(PathBuf, PersistentState, Option<String>)> {
+    if let Some(path) = explicit {
+        let (state_path, state) = resolve_named_state(Some(path), None, cwd)?;
+        return Ok((state_path, state, None));
+    }
+
+    let handle = handle.ok_or_else(|| {
+        Error::PersistentState("a live tunnel command needs either a tunnel name or --state".into())
+    })?;
+
+    if let Some((state_path, state)) = find_state_by_name(cwd, handle)? {
+        return Ok((state_path, state, None));
+    }
+
+    if let Some((state_path, state)) = find_live_temporary_state_by_code(cwd, handle)? {
+        return Ok((
+            state_path,
+            state.clone(),
+            Some(format!(
+                "code {} matched local tunnel {}.",
+                handle, state.config.name
+            )),
+        ));
+    }
+
+    Err(Error::PersistentState(format!(
+        "no live tunnel matched local name or shared code {:?}; start the one-off tunnel first, use `tunnelworm tunnel up <name>`, or pass --state",
+        handle
+    )))
+}
+
+async fn wait_for_live_tunnel_ready(state_path: &Path, handle: Option<&str>) -> Result<()> {
+    let style = stdout_style();
+    let mut spinner = StatusLine::stdout();
+    let probe_payload = "__tunnelworm_ready_probe__";
+    loop {
+        match current_tunnel_runtime(state_path)? {
+            ResolvedTunnelRuntime::Stopped => {
+                spinner.clear()?;
+                let target = handle.unwrap_or_else(|| {
+                    state_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("tunnel")
+                });
+                return Err(Error::Session(format!(
+                    "tunnel {target:?} is not running"
+                )));
+            },
+            ResolvedTunnelRuntime::Live(status) => {
+                match echo_runtime(state_path, probe_payload).await {
+                    Ok(Some(payload)) if payload == probe_payload => {
+                        spinner.clear()?;
+                        return Ok(());
+                    },
+                    Ok(Some(_)) | Ok(None) | Err(Error::Session(_)) => {},
+                    Err(error) => {
+                        spinner.clear()?;
+                        return Err(error);
+                    },
+                }
+                let detail = status.detail.unwrap_or_else(|| {
+                    "waiting for the tunnel to become ready...".into()
+                });
+                spinner.update(&style.status("Status:"), &detail)?;
+                async_std::task::sleep(std::time::Duration::from_millis(125)).await;
+            },
+        }
+    }
+}
+
+fn find_live_temporary_state_by_code(
+    cwd: &Path,
+    code: &str,
+) -> Result<Option<(PathBuf, PersistentState)>> {
+    let mut matches = Vec::new();
+    for (state_path, state) in list_saved_tunnels(cwd)? {
+        if !state.config.temporary || state.config.code != code {
+            continue;
+        }
+        if matches!(current_tunnel_runtime(&state_path)?, ResolvedTunnelRuntime::Stopped) {
+            continue;
+        }
+        matches.push((state_path, state));
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.into_iter().next()),
+        _ => Err(Error::PersistentState(format!(
+            "multiple live temporary tunnels match shared code {:?}; rerun with the local tunnel name instead",
+            code
+        ))),
+    }
 }
 
 pub fn resolve_state_path(

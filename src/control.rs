@@ -1,5 +1,5 @@
 use async_std::{
-    io::{BufReader, prelude::*},
+    io::prelude::*,
     os::unix::net::UnixListener,
     task,
 };
@@ -139,6 +139,43 @@ pub fn probe_runtime(state_path: &Path) -> Result<Option<ControlResponse>> {
     Ok(Some(serde_json::from_str(&line)?))
 }
 
+pub async fn echo_runtime(state_path: &Path, payload: &str) -> Result<Option<String>> {
+    let socket_path = control_socket_path(state_path);
+    if !socket_path.exists() {
+        return Ok(None);
+    }
+
+    let mut stream = match async_std::os::unix::net::UnixStream::connect(&socket_path).await {
+        Ok(stream) => stream,
+        Err(error) if is_stale_control_socket(&error) => return Ok(None),
+        Err(error) => {
+            return Err(Error::PersistentState(format!(
+                "could not connect to the local tunnel control socket at {}: {error}",
+                socket_path.display()
+            )))
+        },
+    };
+    let mut request = serde_json::to_vec(&ControlRequest::Echo {
+        payload: payload.to_string(),
+    })?;
+    request.push(b'\n');
+    stream.write_all(&request).await?;
+    stream.flush().await?;
+
+    let line = read_request_line(&mut stream).await?;
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+
+    match serde_json::from_str::<ControlResponse>(&line)? {
+        ControlResponse::Echo { payload } => Ok(Some(payload)),
+        ControlResponse::Error { message } => Err(Error::Session(message)),
+        ControlResponse::Probe { .. } => Err(Error::Session(
+            "received an unexpected probe response while checking tunnel readiness".into(),
+        )),
+    }
+}
+
 fn is_stale_control_socket(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
@@ -153,13 +190,11 @@ pub fn control_socket_path(state_path: &Path) -> PathBuf {
 }
 
 async fn handle_stream(
-    stream: async_std::os::unix::net::UnixStream,
+    mut stream: async_std::os::unix::net::UnixStream,
     state_path: &Path,
     requests: Sender<RuntimeControlRequest>,
 ) -> Result<()> {
-    let mut reader = BufReader::new(&stream);
-    let mut line = String::new();
-    reader.read_line(&mut line).await?;
+    let line = read_request_line(&mut stream).await?;
     if line.trim().is_empty() {
         return Ok(());
     }
@@ -228,6 +263,26 @@ async fn handle_stream(
     writer.write_all(&bytes).await?;
     writer.flush().await?;
     Ok(())
+}
+
+async fn read_request_line(
+    stream: &mut async_std::os::unix::net::UnixStream,
+) -> Result<String> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let read = stream.read(&mut byte).await?;
+        if read == 0 {
+            break;
+        }
+        line.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    Ok(String::from_utf8(line).map_err(|error| {
+        Error::Session(format!("control request was not valid UTF-8: {error}"))
+    })?)
 }
 
 async fn round_trip_runtime_request<Fallback, Build>(
