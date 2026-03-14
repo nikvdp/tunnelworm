@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "tunnelworm"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-channel 2.5.0",
  "async-std",
