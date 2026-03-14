@@ -134,6 +134,19 @@ fn ports_list_subcommand_maps_to_the_existing_list_invocation() {
 }
 
 #[test]
+fn ports_ls_alias_maps_to_the_existing_list_invocation() {
+    let cli = TunnelwormCli::parse_from(["tunnelworm", "ports", "ls", "office-ssh"]);
+    let invocation = TunnelwormInvocation::try_from(cli).expect("ports ls invocation should parse");
+    match invocation {
+        TunnelwormInvocation::PortsList(config) => {
+            assert_eq!(config.name.as_deref(), Some("office-ssh"));
+            assert_eq!(config.state, None);
+        }
+        other => panic!("expected a ports list invocation, got {other:?}"),
+    }
+}
+
+#[test]
 fn bare_ports_command_still_maps_to_the_list_invocation() {
     let cli = TunnelwormCli::parse_from(["tunnelworm", "ports", "office-ssh"]);
     let invocation =
@@ -144,5 +157,15 @@ fn bare_ports_command_still_maps_to_the_list_invocation() {
             assert_eq!(config.state, None);
         }
         other => panic!("expected a ports list invocation, got {other:?}"),
+    }
+}
+
+#[test]
+fn tunnel_ls_alias_maps_to_the_existing_tunnel_list_invocation() {
+    let cli = TunnelwormCli::parse_from(["tunnelworm", "tunnel", "ls"]);
+    let invocation = TunnelwormInvocation::try_from(cli).expect("tunnel ls should parse");
+    match invocation {
+        TunnelwormInvocation::TunnelList => {}
+        other => panic!("expected a tunnel list invocation, got {other:?}"),
     }
 }

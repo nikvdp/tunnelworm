@@ -844,7 +844,7 @@ pub enum TunnelCommand {
     Create(Box<TunnelCreateArgs>),
     #[command(about = "Start one saved side of a persistent tunnel")]
     Up(TunnelUpArgs),
-    #[command(about = "List saved persistent tunnel endpoints")]
+    #[command(about = "List saved persistent tunnel endpoints", alias = "ls")]
     List(TunnelListArgs),
     #[command(about = "Inspect persistent tunnel state without starting the tunnel")]
     Status(TunnelStatusArgs),
@@ -1044,7 +1044,10 @@ pub struct TunnelPortsRemoveArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TunnelPortsSubcommand {
-    #[command(about = "List the current live port forwards on one tunnel")]
+    #[command(
+        about = "List the current live port forwards on one tunnel",
+        alias = "ls"
+    )]
     List(TunnelPortsListArgs),
     #[command(about = "Add one live port forward to one tunnel")]
     Add(TunnelPortsAddArgs),
