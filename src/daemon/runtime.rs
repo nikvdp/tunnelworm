@@ -282,7 +282,7 @@ async fn handle_incoming_channel(
                     let _ = send_channel_packet(
                         &incoming.channel,
                         &ShellPacket::Error {
-                            message: error.to_string(),
+                            message: protocol_error_message(&error),
                         },
                     )
                     .await;
@@ -303,7 +303,7 @@ async fn handle_incoming_channel(
                     let _ = file_transfer::send_channel_packet(
                         &incoming.channel,
                         &FileTransferPacket::Error {
-                            message: error.to_string(),
+                            message: protocol_error_message(&error),
                         },
                     )
                     .await;
@@ -597,7 +597,7 @@ async fn handle_runtime_control_request(
                     write_stream_packet(
                         &mut stream,
                         &ShellPacket::Error {
-                            message: error.to_string(),
+                            message: protocol_error_message(&error),
                         },
                     )
                     .await?;
@@ -630,7 +630,7 @@ async fn handle_runtime_control_request(
                     write_file_stream_packet(
                         &mut stream,
                         &FileTransferPacket::Error {
-                            message: error.to_string(),
+                            message: protocol_error_message(&error),
                         },
                     )
                     .await?;
@@ -1059,6 +1059,17 @@ fn is_transit_disconnect(error: &Error) -> bool {
     match error {
         Error::Wormhole(wormhole) => wormhole.to_string().contains("Transit error"),
         other => other.to_string().contains("Transit error"),
+    }
+}
+
+fn protocol_error_message(error: &Error) -> String {
+    match error {
+        Error::Usage(message)
+        | Error::Update(message)
+        | Error::Session(message)
+        | Error::PersistentState(message)
+        | Error::Authentication(message) => message.clone(),
+        other => other.to_string(),
     }
 }
 
