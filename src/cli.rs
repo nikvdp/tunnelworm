@@ -2,6 +2,7 @@ use clap::{builder::StyledStr, Args, Command, CommandFactory, FromArgMatches, Pa
 use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsString,
     io::IsTerminal,
     path::{Path, PathBuf},
 };
@@ -468,10 +469,18 @@ pub fn tunnelworm_completion_command() -> Command {
 }
 
 pub fn parse_tunnelworm_cli() -> TunnelwormCli {
-    let matches = tunnelworm_command().get_matches();
-    let mut cli = TunnelwormCli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    try_parse_tunnelworm_cli_from(std::env::args_os()).unwrap_or_else(|error| error.exit())
+}
+
+pub fn try_parse_tunnelworm_cli_from<I, T>(args: I) -> std::result::Result<TunnelwormCli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let matches = tunnelworm_command().try_get_matches_from(args)?;
+    let mut cli = TunnelwormCli::from_arg_matches(&matches)?;
     populate_policy_rules(&mut cli, &matches);
-    cli
+    Ok(cli)
 }
 
 fn extract_policy_rules(matches: &clap::ArgMatches) -> Vec<TunnelPolicyRule> {
