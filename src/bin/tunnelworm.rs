@@ -79,6 +79,9 @@ async fn main() {
 
     if let Err(error) = result {
         eprintln!("{} {error}", stderr_style().error("Error:"));
+        if matches!(error, tunnelworm::error::Error::Usage(_)) {
+            print_matching_help(&raw_args[1..]);
+        }
         std::process::exit(1);
     }
     if let Some(code) = shell_exit_code {
