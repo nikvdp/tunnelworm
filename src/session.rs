@@ -266,5 +266,5 @@ pub async fn run_one_off(config: TunnelConfig) -> Result<()> {
 }
 
 pub async fn run_daemon_placeholder() -> Result<()> {
-    Err(Error::NotImplemented("tunnelwormd runtime"))
+    Err(Error::NotImplemented("internal tunnelworm daemon runtime"))
 }

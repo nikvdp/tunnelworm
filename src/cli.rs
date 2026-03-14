@@ -26,7 +26,7 @@ Top-level `tunnelworm ...` keeps the one-off forwarding path.
 `tunnelworm tunnel list`, `status`, and `delete` manage saved tunnel endpoints.
 `tunnelworm pipe <name>` streams stdin/stdout over one live named tunnel.
 `tunnelworm send-file <name> ...` sends one file over a live named tunnel.
-`tunnelworm self-update` refreshes the installed binaries from GitHub releases.
+`tunnelworm self-update` refreshes the installed binary from GitHub releases.
 
 One side provides `--listen` and the peer provides `--connect`.
 If you use SSH-style compatibility syntax instead, `-L` still needs a
@@ -237,7 +237,7 @@ Examples:
     tunnelworm self-update
 
 Notes:
-  If a sibling tunnelwormd binary is installed next to tunnelworm, it is updated too.";
+  This replaces the installed `tunnelworm` binary in place.";
 
 fn help_bold(value: &str) -> String {
     stdout_style().label(value)
@@ -394,7 +394,7 @@ fn styled_completion_after_help() -> StyledStr {
 
 fn styled_self_update_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm self-update\n\n{}:\n  - This downloads the latest GitHub release for the current platform.\n  - If a sibling `tunnelwormd` is installed next to `tunnelworm`, it is updated too.",
+        "{}:\n  {}:\n    tunnelworm self-update\n\n{}:\n  - This downloads the latest GitHub release for the current platform.\n  - It replaces the installed `tunnelworm` binary in place.",
         help_header("Examples"),
         help_bold("Download and install the latest release"),
         help_header("Notes"),
@@ -637,6 +637,7 @@ pub enum TunnelwormInvocation {
     Run(TunnelConfig),
     Open(TunnelConfig),
     Completion(Shell),
+    InternalDaemon(InternalDaemonConfig),
     SelfUpdate,
     Pipe(TunnelPipeConfig),
     PortsList(TunnelPortsListConfig),
@@ -649,6 +650,13 @@ pub enum TunnelwormInvocation {
     TunnelList,
     TunnelStatus(TunnelStatusConfig),
     TunnelDelete(TunnelDeleteConfig),
+}
+
+#[derive(Debug, Clone)]
+pub struct InternalDaemonConfig {
+    pub mailbox: Option<String>,
+    pub code_length: usize,
+    pub persistent_state: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1152,6 +1160,8 @@ pub struct TunnelwormCompletionCli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum TunnelwormSubcommand {
     Completion(CompletionArgs),
+    #[command(hide = true, name = "internal-daemon")]
+    InternalDaemon(InternalDaemonArgs),
     Open(TunnelOpenArgs),
     SelfUpdate(SelfUpdateArgs),
     Pipe(TunnelPipeArgs),
@@ -1175,12 +1185,30 @@ pub struct CompletionArgs {
 #[command(after_long_help = SELF_UPDATE_AFTER_HELP)]
 pub struct SelfUpdateArgs {}
 
+#[derive(Debug, Clone, Args)]
+#[command(hide = true)]
+pub struct InternalDaemonArgs {
+    #[arg(long = "mailbox")]
+    pub mailbox: Option<String>,
+    #[arg(long = "code-length", default_value_t = 2)]
+    pub code_length: usize,
+    #[arg(long = "persistent-state")]
+    pub persistent_state: Option<PathBuf>,
+}
+
 impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
     type Error = Error;
 
     fn try_from(value: TunnelwormCli) -> Result<Self> {
         match value.command {
             Some(TunnelwormSubcommand::Completion(args)) => Ok(Self::Completion(args.shell)),
+            Some(TunnelwormSubcommand::InternalDaemon(args)) => {
+                Ok(Self::InternalDaemon(InternalDaemonConfig {
+                    mailbox: args.mailbox,
+                    code_length: args.code_length,
+                    persistent_state: args.persistent_state,
+                }))
+            }
             Some(TunnelwormSubcommand::Open(args)) => Ok(Self::Open(TunnelConfig {
                 tunnel_name: None,
                 mailbox: args.mailbox,

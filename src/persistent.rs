@@ -1586,9 +1586,12 @@ fn print_state_block(
 }
 
 fn exec_persistent_daemon(state_path: &Path) -> Result<()> {
-    let daemon_path = persistent_daemon_path()?;
+    let daemon_path = env::current_exe()?;
     let mut command = Command::new(&daemon_path);
-    command.arg("--persistent-state").arg(state_path);
+    command
+        .arg("internal-daemon")
+        .arg("--persistent-state")
+        .arg(state_path);
 
     #[cfg(unix)]
     {
@@ -1616,9 +1619,12 @@ fn run_temporary_daemon(state_path: &Path, interrupt: async_channel::Receiver<()
         return Ok(());
     }
 
-    let daemon_path = persistent_daemon_path()?;
+    let daemon_path = env::current_exe()?;
     let mut command = Command::new(&daemon_path);
-    command.arg("--persistent-state").arg(state_path);
+    command
+        .arg("internal-daemon")
+        .arg("--persistent-state")
+        .arg(state_path);
     #[cfg(unix)]
     let _owner_guard = {
         use std::os::fd::AsRawFd;
@@ -1691,15 +1697,6 @@ fn set_cloexec(fd: std::os::fd::RawFd) -> Result<()> {
         return Err(Error::Io(std::io::Error::last_os_error()));
     }
     Ok(())
-}
-
-fn persistent_daemon_path() -> Result<PathBuf> {
-    let current_exe = env::current_exe()?;
-    let sibling = current_exe.with_file_name("tunnelwormd");
-    if sibling.exists() {
-        return Ok(sibling);
-    }
-    Ok(PathBuf::from("tunnelwormd"))
 }
 
 fn install_frontend_interrupt_notifier() -> Result<async_channel::Receiver<()>> {

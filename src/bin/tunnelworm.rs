@@ -8,6 +8,7 @@ use tunnelworm::{
         TunnelwormInvocation, stderr_style, try_parse_tunnelworm_cli_from, tunnelworm_command,
         tunnelworm_completion_command,
     },
+    daemon::runtime::DaemonConfig,
     persistent,
 };
 
@@ -67,6 +68,16 @@ async fn main() {
                 }
             } else {
                 Ok(())
+            }
+        }
+        TunnelwormInvocation::InternalDaemon(args) => {
+            let config = DaemonConfig {
+                mailbox: args.mailbox,
+                code_length: args.code_length,
+            };
+            match args.persistent_state {
+                Some(path) => tunnelworm::daemon::runtime::run_persistent(path).await,
+                None => tunnelworm::daemon::runtime::run(config).await,
             }
         }
         TunnelwormInvocation::SelfUpdate => tunnelworm::self_update::run_self_update(),
@@ -154,6 +165,9 @@ fn best_matching_subcommand(
     let mut best: Option<(usize, clap::Command)> = None;
     let mut best_name: Option<String> = None;
     for subcommand in command.get_subcommands() {
+        if subcommand.is_hide_set() {
+            continue;
+        }
         let mut consider = |candidate: &str| {
             let distance = edit_distance(token, candidate);
             if distance > 2 && !candidate.starts_with(token) && !token.starts_with(candidate) {
@@ -211,7 +225,10 @@ fn probable_top_level_subcommand_typo(
     let command = tunnelworm_command();
     if command
         .get_subcommands()
-        .any(|sub| sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token))
+        .any(|sub| {
+            !sub.is_hide_set()
+                && (sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token))
+        })
     {
         return None;
     }

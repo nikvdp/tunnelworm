@@ -15,10 +15,6 @@ path = "src/lib.rs"
 name = "tunnelworm"
 path = "src/bin/tunnelworm.rs"
 
-[[bin]]
-name = "tunnelwormd"
-path = "src/bin/tunnelwormd.rs"
-
 [dependencies]
 async-channel = "2.5"
 async-std = { version = "1.13", features = ["attributes"] }
