@@ -18,12 +18,13 @@ struct DaemonHarness {
 
 impl DaemonHarness {
     fn spawn() -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_tunnelwormd"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_tunnelworm"))
+            .arg("internal-daemon")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("tunnelwormd should spawn");
+            .expect("internal tunnelworm daemon should spawn");
 
         let stdin = child.stdin.take().expect("stdin should be piped");
         let stdout = child.stdout.take().expect("stdout should be piped");
@@ -145,7 +146,7 @@ fn peer_connected_event_shape_serializes_as_expected() {
 }
 
 #[test]
-fn tunnelwormd_forwards_bytes_end_to_end() {
+fn internal_daemon_forwards_bytes_end_to_end() {
     let listen_port = next_free_port();
     let target_port = next_free_port();
     let echo_server = start_echo_server(target_port);
@@ -181,7 +182,7 @@ fn tunnelwormd_forwards_bytes_end_to_end() {
     let mut client =
         TcpStream::connect(("127.0.0.1", listen_port)).expect("forwarded port should accept");
     client
-        .write_all(b"hello through tunnelwormd\n")
+        .write_all(b"hello through internal daemon\n")
         .expect("client should write through the forward");
     client.flush().expect("client should flush");
 
@@ -190,7 +191,7 @@ fn tunnelwormd_forwards_bytes_end_to_end() {
     reader
         .read_line(&mut echoed)
         .expect("client should read echoed data");
-    assert_eq!(echoed, "hello through tunnelwormd\n");
+    assert_eq!(echoed, "hello through internal daemon\n");
 
     allocator.close();
     joiner.close();
