@@ -62,7 +62,7 @@ Examples:
     tunnelworm tunnel up office-ssh
 
   Start one saved tunnel endpoint later by explicit state path:
-    tunnelworm tunnel up --state ./.tunnelworm/office-ssh--abcd1234.json
+    tunnelworm tunnel up --state /path/to/tunnelworm/office-ssh--abcd1234.json
 
   Stream stdin over a live named tunnel:
     echo hello | tunnelworm pipe office-ssh
@@ -96,6 +96,8 @@ Notes:
   - `--listen` always needs a complementary `--connect` on the peer.
   - `--connect` always needs a complementary `--listen` on the peer.
   - Bare ports on `--listen` and `--connect` default to loopback.
+  - Saved tunnel state defaults to the per-user tunnelworm state directory.
+  - Use `--state-dir` to choose a different state directory or `--state` to point at one file.
   - `-L` always needs a corresponding `-R` on the peer.
   - `-R` always needs a corresponding `-L` on the peer.";
 
@@ -133,7 +135,7 @@ Examples:
     tunnelworm tunnel up office
 
   Start a saved tunnel endpoint by explicit state file:
-    tunnelworm tunnel up --state ./.tunnelworm/laptop-ssh--abcd1234.json";
+    tunnelworm tunnel up --state /path/to/tunnelworm/laptop-ssh--abcd1234.json";
 
 const TUNNEL_LIST_AFTER_HELP: &str = "\
 Example:
@@ -146,7 +148,7 @@ Examples:
     tunnelworm tunnel status laptop-ssh
 
   Inspect an explicit state file directly:
-    tunnelworm tunnel status --state ./.tunnelworm/laptop-ssh--abcd1234.json";
+    tunnelworm tunnel status --state /path/to/tunnelworm/laptop-ssh--abcd1234.json";
 
 const TUNNEL_DELETE_AFTER_HELP: &str = "\
 Examples:
@@ -154,7 +156,7 @@ Examples:
     tunnelworm tunnel delete laptop-ssh
 
   Delete an explicit state file directly:
-    tunnelworm tunnel delete --state ./.tunnelworm/laptop-ssh--abcd1234.json";
+    tunnelworm tunnel delete --state /path/to/tunnelworm/laptop-ssh--abcd1234.json";
 
 const PIPE_AFTER_HELP: &str = "\
 Examples:
@@ -182,6 +184,7 @@ Examples:
 
 Notes:
   The peer writes into its tunnel process working directory unless you pass a remote path.
+  `~` expands on both the sending and receiving sides.
   Existing destination files are rejected unless you pass --overwrite.
   `send` is a shorthand alias for `send-file`.";
 
@@ -309,7 +312,7 @@ fn styled_tunnel_create_after_help() -> StyledStr {
 
 fn styled_tunnel_up_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm tunnel up laptop-ssh\n\n  {}:\n    tunnelworm tunnel up --state ./.tunnelworm/laptop-ssh--abcd1234.json",
+        "{}:\n  {}:\n    tunnelworm tunnel up laptop-ssh\n\n  {}:\n    tunnelworm tunnel up --state /path/to/tunnelworm/laptop-ssh--abcd1234.json",
         help_header("Examples"),
         help_bold("Start a saved endpoint by name"),
         help_bold("Start a saved endpoint by explicit state file"),
@@ -336,7 +339,7 @@ fn styled_tunnel_list_after_help() -> StyledStr {
 
 fn styled_tunnel_status_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm tunnel status laptop-ssh\n\n  {}:\n    tunnelworm tunnel status --state ./.tunnelworm/laptop-ssh--abcd1234.json",
+        "{}:\n  {}:\n    tunnelworm tunnel status laptop-ssh\n\n  {}:\n    tunnelworm tunnel status --state /path/to/tunnelworm/laptop-ssh--abcd1234.json",
         help_header("Examples"),
         help_bold("Inspect a saved endpoint by name"),
         help_bold("Inspect an explicit state file directly"),
@@ -345,7 +348,7 @@ fn styled_tunnel_status_after_help() -> StyledStr {
 
 fn styled_tunnel_delete_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm tunnel delete laptop-ssh\n\n  {}:\n    tunnelworm tunnel delete --state ./.tunnelworm/laptop-ssh--abcd1234.json",
+        "{}:\n  {}:\n    tunnelworm tunnel delete laptop-ssh\n\n  {}:\n    tunnelworm tunnel delete --state /path/to/tunnelworm/laptop-ssh--abcd1234.json",
         help_header("Examples"),
         help_bold("Delete a saved endpoint by name"),
         help_bold("Delete an explicit state file directly"),
@@ -364,7 +367,7 @@ fn styled_pipe_after_help() -> StyledStr {
 
 fn styled_send_file_after_help() -> StyledStr {
     StyledStr::from(format!(
-        "{}:\n  {}:\n    tunnelworm send-file office-ssh ./report.txt\n\n  {}:\n    tunnelworm send-file office-ssh ./report.txt /tmp/inbox/report.txt\n\n  {}:\n    tunnelworm send-file office-ssh ./report.txt /tmp/inbox/report.txt --overwrite\n\n{}:\n  - The peer writes into its tunnel process working directory unless you pass a remote path.\n  - Existing destination files are rejected unless you pass `--overwrite`.\n  - `send` is a shorthand alias for `send-file`.",
+        "{}:\n  {}:\n    tunnelworm send-file office-ssh ./report.txt\n\n  {}:\n    tunnelworm send-file office-ssh ./report.txt ~/inbox/report.txt\n\n  {}:\n    tunnelworm send-file office-ssh ./report.txt ~/inbox/report.txt --overwrite\n\n{}:\n  - The peer writes into its tunnel process working directory unless you pass a remote path.\n  - `~` expands on both the sending and receiving sides.\n  - Existing destination files are rejected unless you pass `--overwrite`.\n  - `send` is a shorthand alias for `send-file`.",
         help_header("Examples"),
         help_bold("Send one file and keep its basename on the peer"),
         help_bold("Send one file to an explicit path on the peer"),
