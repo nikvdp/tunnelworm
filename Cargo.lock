@@ -3199,6 +3199,7 @@ dependencies = [
  "fs2",
  "futures",
  "hex",
+ "libc",
  "magic-wormhole",
  "portable-pty",
  "rand 0.8.5",
