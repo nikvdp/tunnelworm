@@ -115,11 +115,24 @@ fn release(args: Vec<String>) -> Result<()> {
 }
 
 fn repo_root() -> Result<PathBuf> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "xtask is missing its repository root".into())
+    if let Some(explicit_root) = env::var_os("TUNNELWORM_REPO_ROOT") {
+        return Ok(PathBuf::from(explicit_root));
+    }
+
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(env::current_dir()?)
+        .output()?;
+    if !output.status.success() {
+        return Err("could not resolve the repository root from git".into());
+    }
+
+    let root = String::from_utf8(output.stdout)?;
+    let root = root.trim();
+    if root.is_empty() {
+        return Err("git returned an empty repository root".into());
+    }
+    Ok(PathBuf::from(root))
 }
 
 fn ensure_clean_tree(repo_root: &Path) -> Result<()> {
