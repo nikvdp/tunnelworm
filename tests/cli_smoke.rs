@@ -118,3 +118,31 @@ fn top_level_policy_flags_preserve_their_original_order() {
         other => panic!("expected a run invocation, got {other:?}"),
     }
 }
+
+#[test]
+fn ports_list_subcommand_maps_to_the_existing_list_invocation() {
+    let cli = TunnelwormCli::parse_from(["tunnelworm", "ports", "list", "office-ssh"]);
+    let invocation =
+        TunnelwormInvocation::try_from(cli).expect("ports list invocation should parse");
+    match invocation {
+        TunnelwormInvocation::PortsList(config) => {
+            assert_eq!(config.name.as_deref(), Some("office-ssh"));
+            assert_eq!(config.state, None);
+        }
+        other => panic!("expected a ports list invocation, got {other:?}"),
+    }
+}
+
+#[test]
+fn bare_ports_command_still_maps_to_the_list_invocation() {
+    let cli = TunnelwormCli::parse_from(["tunnelworm", "ports", "office-ssh"]);
+    let invocation =
+        TunnelwormInvocation::try_from(cli).expect("bare ports invocation should parse");
+    match invocation {
+        TunnelwormInvocation::PortsList(config) => {
+            assert_eq!(config.name.as_deref(), Some("office-ssh"));
+            assert_eq!(config.state, None);
+        }
+        other => panic!("expected a ports list invocation, got {other:?}"),
+    }
+}

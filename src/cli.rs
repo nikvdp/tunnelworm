@@ -1044,6 +1044,8 @@ pub struct TunnelPortsRemoveArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TunnelPortsSubcommand {
+    #[command(about = "List the current live port forwards on one tunnel")]
+    List(TunnelPortsListArgs),
     #[command(about = "Add one live port forward to one tunnel")]
     Add(TunnelPortsAddArgs),
     #[command(about = "Remove one live port forward from one tunnel")]
@@ -1215,6 +1217,12 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                     Ok(Self::PortsList(TunnelPortsListConfig {
                         name: args.name,
                         state: args.state,
+                    }))
+                }
+                Some(TunnelPortsSubcommand::List(list)) => {
+                    Ok(Self::PortsList(TunnelPortsListConfig {
+                        name: list.name,
+                        state: list.state,
                     }))
                 }
                 Some(TunnelPortsSubcommand::Add(add)) => Ok(Self::PortsAdd(TunnelPortsAddConfig {
