@@ -1557,6 +1557,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ports_rule_implies_remote_port_management_until_it_is_denied() {
+        let rules = vec![
+            TunnelPolicyRule {
+                effect: TunnelPolicyEffect::Deny,
+                capability: TunnelCapability::All,
+            },
+            TunnelPolicyRule {
+                effect: TunnelPolicyEffect::Allow,
+                capability: TunnelCapability::Ports,
+            },
+            TunnelPolicyRule {
+                effect: TunnelPolicyEffect::Deny,
+                capability: TunnelCapability::RemotePortMgmt,
+            },
+        ];
+
+        assert!(capability_allowed(&rules, TunnelCapability::Ports));
+        assert!(!capability_allowed(
+            &rules,
+            TunnelCapability::RemotePortMgmt
+        ));
+        assert!(!capability_allowed(&rules, TunnelCapability::Shell));
+    }
+
     struct Fixture {
         root: PathBuf,
         cwd: PathBuf,
@@ -1603,6 +1628,8 @@ mod tests {
                     local_connect_port: Some(22),
                     connect_address: Some("127.0.0.1".into()),
                 }],
+                ports: Vec::new(),
+                policy_rules: Vec::new(),
             };
             let state = PersistentState::new(config.clone(), persistent_auth::generate_identity());
             let path = project_state_dir(&self.cwd).join(

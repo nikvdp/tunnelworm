@@ -1,5 +1,8 @@
 use clap::Parser;
-use tunnelworm::cli::{ForwardHalf, TunnelwormCli, TunnelwormInvocation};
+use tunnelworm::cli::{
+    try_parse_tunnelworm_cli_from, ForwardHalf, TunnelCapability, TunnelPolicyEffect,
+    TunnelPolicyRule, TunnelwormCli, TunnelwormInvocation,
+};
 
 #[test]
 fn parses_ssh_style_local_flag_into_the_listen_half() {
@@ -68,6 +71,45 @@ fn one_off_with_an_explicit_code_stays_in_join_flow() {
             assert_eq!(config.locals.len(), 1);
             assert_eq!(config.locals[0].local_listen_port, Some(9000));
             assert_eq!(config.locals[0].bind_interface, None);
+        },
+        other => panic!("expected a run invocation, got {other:?}"),
+    }
+}
+
+#[test]
+fn top_level_policy_flags_preserve_their_original_order() {
+    let cli = try_parse_tunnelworm_cli_from([
+        "tunnelworm",
+        "--connect",
+        "22",
+        "--deny",
+        "all",
+        "--allow",
+        "ports",
+        "--deny",
+        "remote-port-mgmt",
+    ])
+    .expect("top-level policy flags should parse");
+    let invocation = TunnelwormInvocation::try_from(cli).expect("top-level invocation should parse");
+    match invocation {
+        TunnelwormInvocation::Run(config) => {
+            assert_eq!(
+                config.policy_rules,
+                vec![
+                    TunnelPolicyRule {
+                        effect: TunnelPolicyEffect::Deny,
+                        capability: TunnelCapability::All,
+                    },
+                    TunnelPolicyRule {
+                        effect: TunnelPolicyEffect::Allow,
+                        capability: TunnelCapability::Ports,
+                    },
+                    TunnelPolicyRule {
+                        effect: TunnelPolicyEffect::Deny,
+                        capability: TunnelCapability::RemotePortMgmt,
+                    },
+                ]
+            );
         },
         other => panic!("expected a run invocation, got {other:?}"),
     }
