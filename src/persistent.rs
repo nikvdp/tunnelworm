@@ -1806,6 +1806,22 @@ mod tests {
     }
 
     #[test]
+    fn missing_live_tunnel_handle_lists_the_available_live_tunnels() {
+        let mut fixture = Fixture::new("resolve-missing-handle");
+        fixture.write_live_state("office-ssh", "9-regression-live");
+
+        let error = resolve_live_tunnel_target(None, None, fixture.cwd(), "pipe over")
+            .expect_err("missing handle should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("specify which live tunnel to pipe over with <NAME> or --state; live tunnels: office-ssh"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn ports_rule_implies_remote_port_management_until_it_is_denied() {
         let rules = vec![
             TunnelPolicyRule {

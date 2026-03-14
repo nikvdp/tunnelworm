@@ -1,4 +1,6 @@
 use clap::Parser;
+use std::process::Command;
+use tempfile::tempdir;
 use tunnelworm::cli::{
     ForwardHalf, TunnelCapability, TunnelPolicyEffect, TunnelPolicyRule, TunnelwormCli,
     TunnelwormInvocation, try_parse_tunnelworm_cli_from,
@@ -168,4 +170,23 @@ fn tunnel_ls_alias_maps_to_the_existing_tunnel_list_invocation() {
         TunnelwormInvocation::TunnelList => {}
         other => panic!("expected a tunnel list invocation, got {other:?}"),
     }
+}
+
+#[test]
+fn ports_list_without_a_live_tunnel_reports_the_runtime_problem() {
+    let cwd = tempdir().expect("temp dir should exist");
+    let output = Command::new(env!("CARGO_BIN_EXE_tunnelworm"))
+        .current_dir(cwd.path())
+        .args(["ports", "list"])
+        .output()
+        .expect("binary should run");
+
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "no live tunnels are running locally, so there is no tunnel to list ports on"
+        )
+    );
+    assert!(stderr.contains("List the current live port forwards on one tunnel"));
 }

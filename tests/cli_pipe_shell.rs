@@ -99,8 +99,8 @@ fn parses_send_file_alias_name_and_destination() {
             destination,
             overwrite,
         }) => {
-            assert_eq!(name, "office-ssh");
-            assert_eq!(source, std::path::PathBuf::from("./report.txt"));
+            assert_eq!(name.as_deref(), Some("office-ssh"));
+            assert_eq!(source, Some(std::path::PathBuf::from("./report.txt")));
             assert_eq!(
                 destination,
                 Some(std::path::PathBuf::from("/tmp/inbox/report.txt"))
