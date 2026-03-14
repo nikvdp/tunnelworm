@@ -331,3 +331,33 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     }
     hash
 }
+
+#[cfg(test)]
+mod tests {
+    use super::read_request_line;
+    use async_std::{io::{ReadExt, WriteExt}, os::unix::net::UnixStream, task};
+
+    #[test]
+    fn read_request_line_leaves_following_bytes_intact() {
+        task::block_on(async {
+            let (mut client, mut server) = UnixStream::pair().expect("unix pair should open");
+            let writer = task::spawn(async move {
+                client
+                    .write_all(b"{\"kind\":\"send-file\"}\n\x00\x00\x00\x04ping")
+                    .await
+                    .expect("request should write");
+            });
+            let line = read_request_line(&mut server)
+                .await
+                .expect("request line should parse");
+            assert_eq!(line, "{\"kind\":\"send-file\"}\n");
+            let mut trailing = [0u8; 8];
+            server
+                .read_exact(&mut trailing)
+                .await
+                .expect("binary payload should remain readable");
+            assert_eq!(&trailing, b"\x00\x00\x00\x04ping");
+            writer.await;
+        });
+    }
+}

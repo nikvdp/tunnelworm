@@ -1191,3 +1191,129 @@ pub fn remove_state_artifacts(state_path: &Path) {
     let _ = fs::remove_file(runtime_status_path(state_path));
     let _ = fs::remove_file(control_socket_path(state_path));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistent_auth;
+    use fs2::FileExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn resolves_a_live_temporary_tunnel_by_shared_code() {
+        let mut fixture = Fixture::new("resolve-by-code");
+        let first = fixture.write_live_state("tmp-connect-one", "9-regression-parsnip");
+
+        let (resolved_path, resolved_state, correction) =
+            resolve_live_tunnel_handle(None, Some("9-regression-parsnip"), fixture.cwd())
+                .expect("shared code should resolve");
+
+        assert_eq!(resolved_path, first.path);
+        assert_eq!(resolved_state.config.name, "tmp-connect-one");
+        assert_eq!(
+            correction.as_deref(),
+            Some("code 9-regression-parsnip matched local tunnel tmp-connect-one.")
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_live_temporary_code_matches() {
+        let mut fixture = Fixture::new("resolve-ambiguous");
+        fixture.write_live_state("tmp-connect-one", "9-regression-ambiguous");
+        fixture.write_live_state("tmp-listen-two", "9-regression-ambiguous");
+
+        let error = resolve_live_tunnel_handle(
+            None,
+            Some("9-regression-ambiguous"),
+            fixture.cwd(),
+        )
+        .expect_err("ambiguous code should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("multiple live temporary tunnels match shared code"),
+            "unexpected error: {error}"
+        );
+    }
+
+    struct Fixture {
+        root: PathBuf,
+        cwd: PathBuf,
+        locks: Vec<File>,
+    }
+
+    struct StateHandle {
+        path: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(label: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be valid")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "tunnelworm-persistent-test-{label}-{unique}"
+            ));
+            let cwd = root.join("cwd");
+            fs::create_dir_all(project_state_dir(&cwd)).expect("project state dir should exist");
+            Self {
+                root,
+                cwd,
+                locks: Vec::new(),
+            }
+        }
+
+        fn cwd(&self) -> &Path {
+            &self.cwd
+        }
+
+        fn write_live_state(&mut self, name: &str, code: &str) -> StateHandle {
+            let config = PersistentConfig {
+                name: name.into(),
+                code: code.into(),
+                mailbox: None,
+                temporary: true,
+                role: PersistentRole::Allocate,
+                locals: Vec::new(),
+                remotes: vec![RemoteSpec {
+                    name: "tmp-rule".into(),
+                    remote_listen_port: Some(22),
+                    local_connect_port: Some(22),
+                    connect_address: Some("127.0.0.1".into()),
+                }],
+            };
+            let state = PersistentState::new(config.clone(), persistent_auth::generate_identity());
+            let path = project_state_dir(&self.cwd).join(
+                state_file_name(&config).expect("state file name should render"),
+            );
+            save_state(&path, &state).expect("state should save");
+            fs::write(
+                runtime_status_path(&path),
+                serde_json::to_vec(&TunnelRuntimeStatus {
+                    phase: TunnelRuntimePhase::Up,
+                    detail: Some("peer connected; live tunnel ready".into()),
+                })
+                .expect("runtime status should encode"),
+            )
+            .expect("runtime status should save");
+            let lock = OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .open(path.with_extension("lock"))
+                .expect("lock file should open");
+            lock.try_lock_exclusive()
+                .expect("lock file should be held exclusively");
+            self.locks.push(lock);
+            StateHandle { path }
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+}
