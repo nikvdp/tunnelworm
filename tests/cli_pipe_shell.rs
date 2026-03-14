@@ -1,6 +1,7 @@
 use clap::Parser;
 use tunnelworm::cli::{
-    tunnelworm_command, TunnelPipeConfig, TunnelShellConfig, TunnelwormCli, TunnelwormInvocation,
+    tunnelworm_command, TunnelPipeConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelwormCli,
+    TunnelwormInvocation,
 };
 
 fn render_long_help() -> String {
@@ -16,9 +17,13 @@ fn render_long_help() -> String {
 fn top_level_help_mentions_pipe_and_shell_rules() {
     let help = render_long_help();
     assert!(help.contains("echo hello | tunnelworm pipe office-ssh"));
+    assert!(help.contains("tunnelworm send-file office-ssh ./report.txt"));
     assert!(help.contains("tunnelworm shell office-ssh"));
     assert!(help.contains(
         "tunnelworm pipe` infers send or receive from stdio unless both ends are redirected"
+    ));
+    assert!(help.contains(
+        "tunnelworm send-file` writes into the peer's working directory unless you pass a remote path"
     ));
     assert!(help.contains(
         "Without `--command`, `tunnelworm shell` starts the remote login shell"
@@ -50,6 +55,21 @@ fn shell_help_mentions_remote_login_shell() {
 }
 
 #[test]
+fn send_file_help_mentions_default_destination_and_alias() {
+    let mut command = tunnelworm_command();
+    let send_file_help = command
+        .find_subcommand_mut("send-file")
+        .expect("send-file subcommand should exist")
+        .render_long_help()
+        .to_string();
+    assert!(send_file_help.contains("tunnelworm send-file office-ssh ./report.txt"));
+    assert!(send_file_help.contains(
+        "The peer writes into its tunnel process working directory unless you pass a remote path."
+    ));
+    assert!(send_file_help.contains("`send` is a shorthand alias for `send-file`."));
+}
+
+#[test]
 fn parses_pipe_send_mode_and_name() {
     let cli = TunnelwormCli::parse_from(["tunnelworm", "pipe", "office-ssh", "--send"]);
     let invocation = TunnelwormInvocation::try_from(cli).expect("pipe invocation should parse");
@@ -59,6 +79,36 @@ fn parses_pipe_send_mode_and_name() {
             assert!(matches!(mode, Some(tunnelworm::pipe::PipeMode::Send)));
         },
         other => panic!("expected pipe invocation, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_send_file_alias_name_and_destination() {
+    let cli = TunnelwormCli::parse_from([
+        "tunnelworm",
+        "send",
+        "office-ssh",
+        "./report.txt",
+        "/tmp/inbox/report.txt",
+        "--overwrite",
+    ]);
+    let invocation = TunnelwormInvocation::try_from(cli).expect("send-file invocation should parse");
+    match invocation {
+        TunnelwormInvocation::SendFile(TunnelSendFileConfig {
+            name,
+            source,
+            destination,
+            overwrite,
+        }) => {
+            assert_eq!(name, "office-ssh");
+            assert_eq!(source, std::path::PathBuf::from("./report.txt"));
+            assert_eq!(
+                destination,
+                Some(std::path::PathBuf::from("/tmp/inbox/report.txt"))
+            );
+            assert!(overwrite);
+        },
+        other => panic!("expected send-file invocation, got {other:?}"),
     }
 }
 
