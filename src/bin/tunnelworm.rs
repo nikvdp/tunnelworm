@@ -223,13 +223,10 @@ fn probable_top_level_subcommand_typo(
     }
 
     let command = tunnelworm_command();
-    if command
-        .get_subcommands()
-        .any(|sub| {
-            !sub.is_hide_set()
-                && (sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token))
-        })
-    {
+    if command.get_subcommands().any(|sub| {
+        !sub.is_hide_set()
+            && (sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token))
+    }) {
         return None;
     }
 
