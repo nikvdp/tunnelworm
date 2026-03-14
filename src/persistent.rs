@@ -1664,6 +1664,22 @@ mod tests {
     }
 
     #[test]
+    fn dead_temporary_tunnel_names_do_not_resolve_as_live_handles() {
+        let fixture = Fixture::new("resolve-dead-name");
+        fixture.write_dead_state("tmp-dead-one", "9-regression-dead");
+
+        let error = resolve_live_tunnel_handle(None, Some("tmp-dead-one"), fixture.cwd())
+            .expect_err("dead temporary tunnel name should not resolve");
+
+        assert!(
+            error
+                .to_string()
+                .contains("no live tunnel matched local name or shared code"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn ports_rule_implies_remote_port_management_until_it_is_denied() {
         let rules = vec![
             TunnelPolicyRule {
@@ -1804,6 +1820,30 @@ mod tests {
                 }
             });
             self.socket_paths.push(socket_path);
+            StateHandle { path }
+        }
+
+        fn write_dead_state(&self, name: &str, code: &str) -> StateHandle {
+            let config = PersistentConfig {
+                name: name.into(),
+                code: code.into(),
+                mailbox: None,
+                temporary: true,
+                role: PersistentRole::Allocate,
+                locals: Vec::new(),
+                remotes: vec![RemoteSpec {
+                    name: "tmp-rule".into(),
+                    remote_listen_port: Some(22),
+                    local_connect_port: Some(22),
+                    connect_address: Some("127.0.0.1".into()),
+                }],
+                ports: Vec::new(),
+                policy_rules: Vec::new(),
+            };
+            let state = PersistentState::new(config.clone(), persistent_auth::generate_identity());
+            let path = project_state_dir(&self.cwd)
+                .join(state_file_name(&config).expect("state file name should render"));
+            save_state(&path, &state).expect("state should save");
             StateHandle { path }
         }
     }
