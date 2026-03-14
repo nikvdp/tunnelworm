@@ -55,8 +55,10 @@ echo hello | tunnelworm pipe <CODE>
 
 ```bash
 tunnelworm send-file <CODE> ./report.txt
-tunnelworm send-file <CODE> ./report.txt /tmp/inbox/report.txt
+tunnelworm send-file <CODE> ./report.txt ~/inbox/report.txt
 ```
+
+`~` expands on both the sending and receiving sides.
 
 ### Live port management
 
@@ -119,9 +121,7 @@ tunnelworm tunnel delete office
 ### Where named tunnel state lives
 
 Each named tunnel is a small JSON file. By default, tunnelworm keeps these
-files in a `.tunnelworm/` directory inside the current working directory.
-If the current directory is not writable, it falls back to a per-user
-location:
+files in a per-user state directory:
 
 | Platform | Per-user path |
 |----------|---------------|
@@ -129,11 +129,8 @@ location:
 | macOS    | `~/Library/Application Support/tunnelworm` |
 | Windows  | `%APPDATA%\tunnelworm` |
 
-When looking up an existing tunnel, tunnelworm checks the project directory
-first, then the per-user directory. This means two project directories can
-each have their own named tunnels without colliding.
-
-To point at a specific state file directly, pass `--state`.
+Use `--state-dir` to choose a different state directory for one command, or
+`--state` to point at one specific state file directly.
 
 ---
 
