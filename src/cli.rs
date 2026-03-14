@@ -726,6 +726,10 @@ impl AnsiStyle {
         self.paint(value, "1")
     }
 
+    pub fn code(&self, value: &str) -> String {
+        self.paint(value, "1")
+    }
+
     pub fn status(&self, value: &str) -> String {
         self.paint(value, "1;33")
     }

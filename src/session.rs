@@ -210,7 +210,7 @@ pub async fn run_one_off(config: TunnelConfig) -> Result<()> {
         } else {
             "One-off join:"
         };
-        println!("{} {}", style.heading(mode), prepared.code);
+        println!("{} {}", style.heading(mode), style.code(&prepared.code));
     }
     println!("{} {}", style.heading("Local:"), config.local_summary());
     if let (Some(preferred), Some(ssh_style)) = (

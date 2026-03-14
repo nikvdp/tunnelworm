@@ -1494,7 +1494,7 @@ fn print_tunnel_intro(
     code: &str,
     config: &TunnelConfig,
 ) {
-    println!("{} {}", style.heading(heading), code);
+    println!("{} {}", style.heading(heading), style.code(code));
     if let Some(tunnel_name) = &config.tunnel_name {
         println!("{} {}", style.heading("Tunnel:"), tunnel_name);
     }
