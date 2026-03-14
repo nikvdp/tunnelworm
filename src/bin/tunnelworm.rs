@@ -14,6 +14,19 @@ use tunnelworm::{
 #[async_std::main]
 async fn main() {
     let raw_args: Vec<OsString> = env::args_os().collect();
+    if let Some((typed, suggested, help_command)) = probable_top_level_subcommand_typo(&raw_args[1..])
+    {
+        eprintln!("error: unrecognized subcommand '{typed}'");
+        eprintln!();
+        eprintln!("  tip: a similar subcommand exists: '{suggested}'");
+        eprintln!();
+        let mut command = help_command;
+        command
+            .write_long_help(&mut io::stderr())
+            .expect("help text should render");
+        eprintln!();
+        std::process::exit(2);
+    }
 
     let args = match try_parse_tunnelworm_cli_from(raw_args.clone()) {
         Ok(args) => args,
@@ -123,9 +136,87 @@ fn matching_help_command(args: &[OsString]) -> clap::Command {
         let Some(next) = command.get_subcommands().find(|sub| {
             sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token)
         }) else {
+            if let Some((_, suggested)) = best_matching_subcommand(&command, token) {
+                command = suggested.clone();
+            }
             break;
         };
         command = next.clone();
     }
     command
+}
+
+fn best_matching_subcommand(command: &clap::Command, token: &str) -> Option<(String, clap::Command)> {
+    let mut best: Option<(usize, clap::Command)> = None;
+    let mut best_name: Option<String> = None;
+    for subcommand in command.get_subcommands() {
+        let mut consider = |candidate: &str| {
+            let distance = edit_distance(token, candidate);
+            if distance > 2 && !candidate.starts_with(token) && !token.starts_with(candidate) {
+                return;
+            }
+            match &best {
+                Some((best_distance, _)) if distance >= *best_distance => {}
+                _ => {
+                    best = Some((distance, subcommand.clone()));
+                    best_name = Some(subcommand.get_name().to_string());
+                }
+            }
+        };
+
+        consider(subcommand.get_name());
+        for alias in subcommand.get_all_aliases() {
+            consider(alias);
+        }
+    }
+
+    match (best, best_name) {
+        (Some((_, command)), Some(name)) => Some((name, command)),
+        _ => None,
+    }
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+
+    for (left_index, left_char) in left.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right.iter().enumerate() {
+            let substitution_cost = usize::from(left_char != right_char);
+            current[right_index + 1] = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(previous[right_index] + substitution_cost);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right.len()]
+}
+
+fn probable_top_level_subcommand_typo(
+    args: &[OsString],
+) -> Option<(String, String, clap::Command)> {
+    let token = args.first()?.to_str()?;
+    if token.starts_with('-') || looks_like_wormhole_code(token) {
+        return None;
+    }
+
+    let command = tunnelworm_command();
+    if command.get_subcommands().any(|sub| {
+        sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token)
+    }) {
+        return None;
+    }
+
+    let (suggested, help_command) = best_matching_subcommand(&command, token)?;
+    Some((token.to_string(), suggested, help_command))
+}
+
+fn looks_like_wormhole_code(token: &str) -> bool {
+    let mut parts = token.split('-');
+    matches!(parts.next(), Some(first) if first.chars().all(|ch| ch.is_ascii_digit()))
+        && parts.next().is_some()
 }
