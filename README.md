@@ -1,8 +1,8 @@
 # tunnelworm
 
-**Connect two machines with a short code. Forward ports, get a shell, pipe data, send files — all over one encrypted tunnel.**
+**Connect two machines peer-to-peer with a short code. Forward ports, get a shell, pipe data, and send files — all over one encrypted tunnel.**
 
-No public IP needed. No SSH keys to exchange. No server to run. One side prints a code, the other side types it in, and you have a tunnel.
+No public IP needed. No SSH keys to exchange. No server to run. One side prints a code, the other side types it in, and the two machines connect peer-to-peer through the tunnel.
 
 Think of it as the tunnelling experience of [chisel](https://github.com/jpillora/chisel) without needing a server, but with a short-code workflow that is easy to start from either side.
 
