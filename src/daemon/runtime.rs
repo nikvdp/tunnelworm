@@ -1484,8 +1484,10 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 &runtime_status,
                 reconnect_role,
                 &state.config.code,
+                None,
             )
-            .await?;
+            .await?
+            .expect("persistent connect loop should not be interruptible");
             eprintln!("{} peer connected", style.status("Status:"));
             eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
             runtime_status.write(TunnelRuntimeStatus {
@@ -1650,14 +1652,18 @@ async fn run_temporary_tunnel(
         eprintln!("{} {welcome}", shared.style.label("Mailbox:"));
     }
 
-    let mut connected = connect_with_progress(
+    let Some(mut connected) = connect_with_progress(
         prepared,
         &shared.style,
         &shared.runtime_status,
         role,
         &state.config.code,
+        Some(interrupt.clone()),
     )
-    .await?;
+    .await?
+    else {
+        return Ok(());
+    };
     eprintln!("{} peer connected", shared.style.status("Status:"));
     eprintln!("{} {}", shared.style.label("Verifier:"), connected.verifier);
     shared.runtime_status.write(TunnelRuntimeStatus {
@@ -1665,7 +1671,14 @@ async fn run_temporary_tunnel(
         detail: Some("peer connected; bringing the live tunnel up...".into()),
     })?;
 
-    let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, intent).await?;
+    let Some(peer_intent) = interruptible(
+        interrupt.clone(),
+        forward::exchange_cli_intents(&mut connected.wormhole, intent),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
     *shared
         .peer_policy
         .lock()
@@ -1687,7 +1700,11 @@ async fn run_temporary_tunnel(
         eprintln!("{} {detail}", shared.style.status("Forwarding:"));
     }
 
-    let transport = MuxTransport::connect(connected, role).await?;
+    let Some(transport) =
+        interruptible(interrupt.clone(), MuxTransport::connect(connected, role)).await?
+    else {
+        return Ok(());
+    };
     let mux_session = transport.session();
     {
         *shared
@@ -1974,17 +1991,31 @@ async fn connect_with_progress(
     runtime_status: &PersistentRuntimeStatus,
     reconnect_role: PersistentRole,
     code: &str,
-) -> Result<session::ConnectedSession> {
+    interrupt: Option<async_channel::Receiver<()>>,
+) -> Result<Option<session::ConnectedSession>> {
     let mut spinner = StatusLine::stderr();
     let connect_future = prepared.connect().fuse();
-    futures::pin_mut!(connect_future);
+    let interrupt_wait = async move {
+        match interrupt {
+            Some(interrupt) => {
+                let _ = interrupt.recv().await;
+            }
+            None => futures::future::pending::<()>().await,
+        }
+    }
+    .fuse();
+    futures::pin_mut!(connect_future, interrupt_wait);
     loop {
         let tick = task::sleep(std::time::Duration::from_millis(125)).fuse();
         futures::pin_mut!(tick);
         futures::select! {
             connected = connect_future => {
                 spinner.clear()?;
-                return connected;
+                return connected.map(Some);
+            },
+            _ = interrupt_wait => {
+                spinner.clear()?;
+                return Ok(None);
             },
             () = tick => {
                 let (phase, detail) = match reconnect_role {
@@ -2004,6 +2035,19 @@ async fn connect_with_progress(
                 spinner.update(&style.status("Status:"), &detail)?;
             }
         }
+    }
+}
+
+async fn interruptible<T, F>(interrupt: async_channel::Receiver<()>, future: F) -> Result<Option<T>>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    let future = future.fuse();
+    let interrupt_wait = interrupt.recv().fuse();
+    futures::pin_mut!(future, interrupt_wait);
+    futures::select! {
+        result = future => result.map(Some),
+        _ = interrupt_wait => Ok(None),
     }
 }
 
