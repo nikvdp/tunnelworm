@@ -15,18 +15,10 @@ use tunnelworm::{
 #[async_std::main]
 async fn main() {
     let raw_args: Vec<OsString> = env::args_os().collect();
-    if let Some((typed, suggested, help_command)) =
-        probable_top_level_subcommand_typo(&raw_args[1..])
-    {
+    if let Some((typed, suggested)) = probable_top_level_subcommand_typo(&raw_args[1..]) {
         eprintln!("error: unrecognized subcommand '{typed}'");
         eprintln!();
         eprintln!("  tip: a similar subcommand exists: '{suggested}'");
-        eprintln!();
-        let mut command = help_command;
-        command
-            .write_long_help(&mut io::stderr())
-            .expect("help text should render");
-        eprintln!();
         std::process::exit(2);
     }
 
@@ -148,9 +140,6 @@ fn matching_help_command(args: &[OsString]) -> clap::Command {
         let Some(next) = command.get_subcommands().find(|sub| {
             sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token)
         }) else {
-            if let Some((_, suggested)) = best_matching_subcommand(&command, token) {
-                command = suggested.clone();
-            }
             break;
         };
         command = next.clone();
@@ -214,9 +203,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
     previous[right.len()]
 }
 
-fn probable_top_level_subcommand_typo(
-    args: &[OsString],
-) -> Option<(String, String, clap::Command)> {
+fn probable_top_level_subcommand_typo(args: &[OsString]) -> Option<(String, String)> {
     let token = args.first()?.to_str()?;
     if token.starts_with('-') || looks_like_wormhole_code(token) {
         return None;
@@ -230,12 +217,47 @@ fn probable_top_level_subcommand_typo(
         return None;
     }
 
-    let (suggested, help_command) = best_matching_subcommand(&command, token)?;
-    Some((token.to_string(), suggested, help_command))
+    let (suggested, _) = best_matching_subcommand(&command, token)?;
+    Some((token.to_string(), suggested))
 }
 
 fn looks_like_wormhole_code(token: &str) -> bool {
     let mut parts = token.split('-');
     matches!(parts.next(), Some(first) if first.chars().all(|ch| ch.is_ascii_digit()))
         && parts.next().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{matching_help_command, probable_top_level_subcommand_typo};
+    use std::ffi::OsString;
+
+    #[test]
+    fn exact_subcommand_name_gets_its_own_help_command() {
+        let args = vec![OsString::from("ports")];
+        let command = matching_help_command(&args);
+        assert_eq!(command.get_name(), "ports");
+    }
+
+    #[test]
+    fn mistyped_subcommand_does_not_guess_a_help_command() {
+        let args = vec![OsString::from("port")];
+        let command = matching_help_command(&args);
+        assert_eq!(command.get_name(), "tunnelworm");
+    }
+
+    #[test]
+    fn exact_subcommand_name_is_not_treated_as_a_typo() {
+        let args = vec![OsString::from("ports")];
+        assert_eq!(probable_top_level_subcommand_typo(&args), None);
+    }
+
+    #[test]
+    fn mistyped_subcommand_only_returns_a_suggestion() {
+        let args = vec![OsString::from("port")];
+        assert_eq!(
+            probable_top_level_subcommand_typo(&args),
+            Some(("port".into(), "ports".into()))
+        );
+    }
 }
