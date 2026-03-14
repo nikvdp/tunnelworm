@@ -116,6 +116,25 @@ tunnelworm tunnel status office
 tunnelworm tunnel delete office
 ```
 
+### Where named tunnel state lives
+
+Each named tunnel is a small JSON file. By default, tunnelworm keeps these
+files in a `.tunnelworm/` directory inside the current working directory.
+If the current directory is not writable, it falls back to a per-user
+location:
+
+| Platform | Per-user path |
+|----------|---------------|
+| Linux    | `$XDG_STATE_HOME/tunnelworm` (or `~/.local/state/tunnelworm`) |
+| macOS    | `~/Library/Application Support/tunnelworm` |
+| Windows  | `%APPDATA%\tunnelworm` |
+
+When looking up an existing tunnel, tunnelworm checks the project directory
+first, then the per-user directory. This means two project directories can
+each have their own named tunnels without colliding.
+
+To point at a specific state file directly, pass `--state`.
+
 ---
 
 ## SSH-style compatibility
@@ -150,6 +169,24 @@ tunnelworm completion zsh
 ```
 
 Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+
+---
+
+## How it works
+
+1. One side creates a tunnel and prints a short code.
+2. The other side joins with that code.
+3. The two machines connect directly — no relay server stays in the path.
+4. Once the tunnel is live, both sides can layer any combination of port
+   forwards, shells, pipes, and file transfers over the single connection.
+
+For one-off tunnels, the short code is the handle while the tunnel is running.
+For named tunnels, the local name replaces the code as the everyday handle
+after the endpoint has been saved.
+
+Port forwards use `--listen` (open a local port) and `--connect` (reach a port
+on the remote side). The SSH-style `-L` / `-R` flags are supported as
+shorthand for one-off forwarding.
 
 ---
 
