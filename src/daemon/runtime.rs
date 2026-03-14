@@ -19,7 +19,7 @@ use crate::{
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
     mux::{ChannelKind, IncomingChannel, MuxSession, MuxTransport},
     pipe::PipeMode,
-    persistent::{PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
+    persistent::{PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, remove_state_artifacts, runtime_status_path, save_state},
     session::{self, SessionOptions},
     shell::{ShellOpen, ShellPacket, bridge_local_shell_stream, run_remote_shell, send_channel_packet, write_stream_packet},
     status_line::StatusLine,
@@ -856,6 +856,12 @@ pub async fn run(config: DaemonConfig) -> Result<()> {
 
 pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     let _lock = acquire_persistent_state_lock(&_state_path)?;
+    let state = load_state(&_state_path)?;
+    let _temporary_cleanup = if state.config.temporary {
+        Some(TemporaryStateCleanup::new(_state_path.clone()))
+    } else {
+        None
+    };
     let runtime_status = PersistentRuntimeStatus::new(&_state_path)?;
     let (control_tx, control_rx) = async_channel::unbounded::<RuntimeControlRequest>();
     let live_session = Arc::new(Mutex::new(None::<MuxSession>));
@@ -867,8 +873,8 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
         pipe_broker.clone(),
         _state_path.clone(),
     ));
-    let mut state = load_state(&_state_path)?;
-    if state.peer_public_key_hex.is_none() {
+    let mut state = state;
+    if !state.config.temporary && state.peer_public_key_hex.is_none() {
         return Err(Error::PersistentState(
             "persistent state is missing the trusted peer identity".into(),
         ));
@@ -879,6 +885,18 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
         locals: state.config.locals.clone(),
         remotes: state.config.remotes.clone(),
     };
+    if state.config.temporary {
+        return run_temporary_tunnel(
+            &_state_path,
+            &mut state,
+            &intent,
+            &style,
+            &runtime_status,
+            live_session,
+            pipe_broker,
+        )
+        .await;
+    }
     let mut retry_delay = 1u64;
     runtime_status.write(TunnelRuntimeStatus {
         phase: TunnelRuntimePhase::Starting,
@@ -991,6 +1009,196 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     }
 }
 
+async fn run_temporary_tunnel(
+    state_path: &Path,
+    state: &mut crate::persistent::PersistentState,
+    intent: &forward::CliIntent,
+    style: &crate::cli::AnsiStyle,
+    runtime_status: &PersistentRuntimeStatus,
+    live_session: Arc<Mutex<Option<MuxSession>>>,
+    pipe_broker: Arc<PipeBroker>,
+) -> Result<()> {
+    let interrupt = install_interrupt_notifier()?;
+    let role = state.config.role;
+    let prepared = session::prepare_session(SessionOptions {
+        mailbox: state.config.mailbox.clone(),
+        code_length: 2,
+        code: if state.config.code.is_empty() {
+            None
+        } else {
+            Some(state.config.code.clone())
+        },
+        allocate_on_connect: false,
+    })
+    .await?;
+    if state.config.code.is_empty() {
+        state.config.code = prepared.code.clone();
+        state.config.name = temporary_tunnel_name(role, &state.config.code);
+        save_state(state_path, state)?;
+    }
+    print_temporary_intro(style, state);
+
+    if let Some(welcome) = &prepared.welcome {
+        eprintln!("{} {welcome}", style.label("Mailbox:"));
+    }
+
+    let mut connected =
+        connect_with_progress(prepared, style, runtime_status, role, &state.config.code).await?;
+    eprintln!("{} peer connected", style.status("Status:"));
+    eprintln!("{} {}", style.label("Verifier:"), connected.verifier);
+    runtime_status.write(TunnelRuntimeStatus {
+        phase: TunnelRuntimePhase::Up,
+        detail: Some(format!("peer connected; verifier {}", connected.verifier)),
+    })?;
+
+    let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, intent).await?;
+    let plan = forward::build_cli_plan(intent, &peer_intent)?;
+    for target in &plan.targets {
+        let detail = format!(
+            "peer {}:{} -> local {}:{}",
+            target.listen_host, target.listen_port, target.connect_host, target.connect_port
+        );
+        runtime_status.write(TunnelRuntimeStatus {
+            phase: TunnelRuntimePhase::Up,
+            detail: Some(detail.clone()),
+        })?;
+        eprintln!("{} {detail}", style.status("Forwarding:"));
+    }
+
+    let transport = MuxTransport::connect(connected, role).await?;
+    let mux_session = transport.session();
+    {
+        *live_session.lock().expect("live session mutex poisoned") = Some(mux_session.clone());
+    }
+    let incoming_task = task::spawn(drive_incoming_channels(
+        mux_session.clone(),
+        pipe_broker.clone(),
+        runtime_status.clone(),
+        style.clone(),
+    ));
+
+    let (listener_cancel_tx, listener_cancel_rx) = async_channel::bounded::<()>(1);
+    let mut listener_tasks = Vec::new();
+    for listener in plan.listeners {
+        listener_tasks.push(task::spawn(drive_listener(
+            listener,
+            mux_session.clone(),
+            runtime_status.clone(),
+            style.clone(),
+            listener_cancel_rx.clone(),
+        )));
+    }
+
+    let transport_wait = transport.wait_for_close().fuse();
+    let interrupt_wait = interrupt.recv().fuse();
+    futures::pin_mut!(transport_wait, interrupt_wait);
+    let result = futures::select! {
+        result = transport_wait => result,
+        _ = interrupt_wait => Ok(()),
+    };
+
+    let _ = listener_cancel_tx.send(()).await;
+    for task in listener_tasks {
+        let _ = task.await;
+    }
+    let _ = incoming_task.cancel().await;
+    *live_session.lock().expect("live session mutex poisoned") = None;
+    clear_pending_pipe_state(&pipe_broker);
+    result
+}
+
+fn print_temporary_intro(
+    style: &crate::cli::AnsiStyle,
+    state: &crate::persistent::PersistentState,
+) {
+    let heading = match state.config.role {
+        PersistentRole::Allocate => "One-off create:",
+        PersistentRole::Join => "One-off join:",
+    };
+    eprintln!("{} {}", style.heading(heading), state.config.code);
+    eprintln!("{} {}", style.heading("Local tunnel:"), state.config.name);
+    eprintln!("{} {}", style.heading("Local:"), temporary_local_summary(&state.config));
+    eprintln!();
+    eprintln!("{}", style.heading("Peer commands"));
+    if let Some(preferred) = temporary_peer_preferred_command(&state.config) {
+        eprintln!("  {} {}", style.label("preferred:"), preferred);
+    }
+    if let Some(ssh_style) = temporary_peer_ssh_command(&state.config) {
+        eprintln!("  {} {}", style.label("ssh-style:"), ssh_style);
+    }
+    eprintln!();
+}
+
+fn temporary_local_summary(config: &crate::persistent::PersistentConfig) -> String {
+    if let Some(local) = config.locals.first() {
+        return format!(
+            "listen on {}:{}",
+            local.bind_interface.as_deref().unwrap_or("127.0.0.1"),
+            local.local_listen_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "PORT".into())
+        );
+    }
+    if let Some(remote) = config.remotes.first() {
+        return format!(
+            "connect to {}:{}",
+            remote.connect_address.as_deref().unwrap_or("127.0.0.1"),
+            remote
+                .local_connect_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "PORT".into())
+        );
+    }
+    "multiple forward halves".into()
+}
+
+fn temporary_peer_preferred_command(
+    config: &crate::persistent::PersistentConfig,
+) -> Option<String> {
+    if !config.locals.is_empty() && config.remotes.is_empty() {
+        Some(format!("tunnelworm --connect HOST:PORT {}", config.code))
+    } else if config.locals.is_empty() && !config.remotes.is_empty() {
+        Some(format!(
+            "tunnelworm --listen LISTEN_HOST:LISTEN_PORT {}",
+            config.code
+        ))
+    } else {
+        None
+    }
+}
+
+fn temporary_peer_ssh_command(config: &crate::persistent::PersistentConfig) -> Option<String> {
+    if let Some(local) = config.locals.first() {
+        return Some(format!(
+            "tunnelworm -R {}:HOST:PORT {}",
+            local.local_listen_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "LISTEN_PORT".into()),
+            config.code
+        ));
+    }
+    if let Some(remote) = config.remotes.first() {
+        return Some(format!(
+            "tunnelworm -L LISTEN_PORT:{}:{} {}",
+            remote.connect_address.as_deref().unwrap_or("HOST"),
+            remote
+                .local_connect_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "PORT".into()),
+            config.code
+        ));
+    }
+    None
+}
+
+fn temporary_tunnel_name(role: PersistentRole, code: &str) -> String {
+    let half = match role {
+        PersistentRole::Allocate => "connect",
+        PersistentRole::Join => "listen",
+    };
+    format!("tmp-{half}-{code}")
+}
+
 fn is_hard_persistent_failure(error: &Error) -> bool {
     matches!(
         error,
@@ -1060,6 +1268,15 @@ fn is_transit_disconnect(error: &Error) -> bool {
         Error::Wormhole(wormhole) => wormhole.to_string().contains("Transit error"),
         other => other.to_string().contains("Transit error"),
     }
+}
+
+fn install_interrupt_notifier() -> Result<async_channel::Receiver<()>> {
+    let (tx, rx) = async_channel::bounded(1);
+    ctrlc::set_handler(move || {
+        let _ = tx.try_send(());
+    })
+    .map_err(|error| Error::Session(format!("could not install temporary tunnel signal handler: {error}")))?;
+    Ok(rx)
 }
 
 fn protocol_error_message(error: &Error) -> String {
@@ -1143,6 +1360,22 @@ async fn sleep_with_retry_status(
 #[derive(Clone)]
 struct PersistentRuntimeStatus {
     path: PathBuf,
+}
+
+struct TemporaryStateCleanup {
+    state_path: PathBuf,
+}
+
+impl TemporaryStateCleanup {
+    fn new(state_path: PathBuf) -> Self {
+        Self { state_path }
+    }
+}
+
+impl Drop for TemporaryStateCleanup {
+    fn drop(&mut self) {
+        remove_state_artifacts(&self.state_path);
+    }
 }
 
 impl PersistentRuntimeStatus {

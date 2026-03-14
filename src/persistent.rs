@@ -44,6 +44,8 @@ pub struct PersistentConfig {
     pub name: String,
     pub code: String,
     pub mailbox: Option<String>,
+    #[serde(default)]
+    pub temporary: bool,
     pub role: PersistentRole,
     pub locals: Vec<LocalSpec>,
     pub remotes: Vec<RemoteSpec>,
@@ -106,6 +108,11 @@ impl PersistentState {
                 "state file mailbox does not match the requested mailbox".into(),
             ));
         }
+        if self.config.temporary != expected.temporary {
+            return Err(Error::PersistentState(
+                "state file lifecycle does not match the requested command".into(),
+            ));
+        }
         if self.config.role != expected.role {
             return Err(Error::PersistentState(format!(
                 "state file role is {:?}, not {:?}",
@@ -134,6 +141,7 @@ impl PersistentConfig {
             name: persistent_name(config, &code),
             code,
             mailbox: config.mailbox.clone(),
+            temporary: false,
             role: PersistentRole::Join,
             locals: config.locals.clone(),
             remotes: config.remotes.clone(),
@@ -145,11 +153,39 @@ impl PersistentConfig {
             name: persistent_name(config, &code),
             code,
             mailbox: config.mailbox.clone(),
+            temporary: false,
             role: PersistentRole::Allocate,
             locals: config.locals.clone(),
             remotes: config.remotes.clone(),
         }
     }
+}
+
+fn temporary_config(config: &TunnelConfig, code: String, role: PersistentRole) -> PersistentConfig {
+    PersistentConfig {
+        name: temporary_tunnel_name(config, &code),
+        code,
+        mailbox: config.mailbox.clone(),
+        temporary: true,
+        role,
+        locals: config.locals.clone(),
+        remotes: config.remotes.clone(),
+    }
+}
+
+pub async fn create_one_off_tunnel(config: &TunnelConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let (code, role) = match &config.code {
+        Some(code) => (code.clone(), PersistentRole::Join),
+        None => (String::new(), PersistentRole::Allocate),
+    };
+    let persistent = temporary_config(config, code.clone(), role);
+    let state_path = resolve_state_path(None, &cwd, &persistent)?;
+    prepare_temporary_state_path(&state_path)?;
+    let mut state = PersistentState::new(persistent.clone(), persistent_auth::generate_identity());
+    state.peer_public_key_hex = None;
+    save_state(&state_path, &state)?;
+    exec_persistent_daemon(&state_path)
 }
 
 pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
@@ -803,6 +839,19 @@ fn conflicting_state_error(path: &Path, detail: &str) -> Error {
     ))
 }
 
+fn prepare_temporary_state_path(state_path: &Path) -> Result<()> {
+    if state_path.exists() {
+        if persistent_worker_running(state_path)? {
+            return Err(Error::PersistentState(format!(
+                "a tunnel worker is already running for {}; stop it before starting the same temporary tunnel again",
+                state_path.display()
+            )));
+        }
+        remove_state_artifacts(state_path);
+    }
+    Ok(())
+}
+
 fn bootstrap_role_label(role: PersistentRole) -> &'static str {
     match role {
         PersistentRole::Allocate => "creator",
@@ -896,6 +945,15 @@ fn persistent_name(config: &TunnelConfig, code: &str) -> String {
         .tunnel_name
         .clone()
         .unwrap_or_else(|| code.to_string())
+}
+
+fn temporary_tunnel_name(config: &TunnelConfig, code: &str) -> String {
+    let half = match config.local_half() {
+        crate::cli::ForwardHalf::Listen => "listen",
+        crate::cli::ForwardHalf::Connect => "connect",
+        crate::cli::ForwardHalf::Mixed => "mixed",
+    };
+    format!("tmp-{half}-{}", slugify_tunnel_name(code))
 }
 
 fn slugify_tunnel_name(name: &str) -> String {
@@ -1011,4 +1069,11 @@ fn human_bytes(bytes: u64) -> String {
     } else {
         format!("{value:.1} {}", UNITS[unit_index])
     }
+}
+
+pub fn remove_state_artifacts(state_path: &Path) {
+    let _ = fs::remove_file(state_path);
+    let _ = fs::remove_file(state_path.with_extension("lock"));
+    let _ = fs::remove_file(runtime_status_path(state_path));
+    let _ = fs::remove_file(control_socket_path(state_path));
 }

@@ -147,7 +147,9 @@ fn is_stale_control_socket(error: &std::io::Error) -> bool {
 }
 
 pub fn control_socket_path(state_path: &Path) -> PathBuf {
-    state_path.with_extension("control.sock")
+    std::env::temp_dir()
+        .join("tunnelworm-control")
+        .join(format!("{:016x}.sock", fnv1a64(state_path.to_string_lossy().as_bytes())))
 }
 
 async fn handle_stream(
@@ -264,4 +266,13 @@ fn current_runtime(state_path: &Path) -> Result<TunnelRuntimeStatus> {
     }
     let bytes = fs::read(&runtime_path)?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
