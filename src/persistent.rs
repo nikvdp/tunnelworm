@@ -12,7 +12,7 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, TunnelConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelPortsAddConfig, TunnelPortsListConfig, TunnelPortsRemoveConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
+    cli::{stdout_style, TunnelCapability, TunnelConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelPolicyEffect, TunnelPolicyRule, TunnelPortsAddConfig, TunnelPortsListConfig, TunnelPortsRemoveConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
     control::{ControlResponse, add_port_forward_runtime, control_socket_path, echo_runtime, probe_runtime, remove_port_forward_runtime},
     error::{Error, Result},
     file_transfer,
@@ -51,6 +51,8 @@ pub struct PersistentConfig {
     pub remotes: Vec<RemoteSpec>,
     #[serde(default)]
     pub ports: Vec<ManagedPortForward>,
+    #[serde(default)]
+    pub policy_rules: Vec<TunnelPolicyRule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +210,40 @@ impl ManagedPortForward {
     }
 }
 
+fn policy_rule_applies(rule: TunnelCapability, capability: TunnelCapability) -> bool {
+    match rule {
+        TunnelCapability::All => true,
+        TunnelCapability::Ports => {
+            matches!(
+                capability,
+                TunnelCapability::Ports | TunnelCapability::RemotePortMgmt
+            )
+        },
+        other => other == capability,
+    }
+}
+
+pub fn capability_allowed(rules: &[TunnelPolicyRule], capability: TunnelCapability) -> bool {
+    let mut allowed = true;
+    for rule in rules {
+        if policy_rule_applies(rule.capability, capability) {
+            allowed = matches!(rule.effect, TunnelPolicyEffect::Allow);
+        }
+    }
+    allowed
+}
+
+fn capability_label(capability: TunnelCapability) -> &'static str {
+    match capability {
+        TunnelCapability::All => "all",
+        TunnelCapability::Ports => "ports",
+        TunnelCapability::RemotePortMgmt => "remote-port-mgmt",
+        TunnelCapability::Shell => "shell",
+        TunnelCapability::Pipe => "pipe",
+        TunnelCapability::SendFile => "send-file",
+    }
+}
+
 impl PersistentState {
     pub fn new(config: PersistentConfig, local_identity: PersistentKeyMaterial) -> Self {
         Self {
@@ -280,6 +316,7 @@ impl PersistentConfig {
             locals: config.locals.clone(),
             remotes: config.remotes.clone(),
             ports: Vec::new(),
+            policy_rules: config.policy_rules.clone(),
         }
     }
 
@@ -293,6 +330,7 @@ impl PersistentConfig {
             locals: config.locals.clone(),
             remotes: config.remotes.clone(),
             ports: Vec::new(),
+            policy_rules: config.policy_rules.clone(),
         }
     }
 }
@@ -307,6 +345,7 @@ fn temporary_config(config: &TunnelConfig, code: String, role: PersistentRole) -
         locals: config.locals.clone(),
         remotes: config.remotes.clone(),
         ports: Vec::new(),
+        policy_rules: config.policy_rules.clone(),
     }
 }
 
@@ -438,6 +477,7 @@ pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
         mailbox: state.config.mailbox.clone(),
         code_length: 2,
         code: Some(state.config.code.clone()),
+        policy_rules: state.config.policy_rules.clone(),
         locals: state.config.locals.clone(),
         remotes: state.config.remotes.clone(),
         state: Some(state_path.clone()),
@@ -518,6 +558,21 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
         style.label("peer key:"),
         peer_key_fingerprint(state.peer_public_key_hex.as_deref())
     );
+    println!("  {}", style.label("permissions:"));
+    for capability in [
+        TunnelCapability::Ports,
+        TunnelCapability::RemotePortMgmt,
+        TunnelCapability::Shell,
+        TunnelCapability::Pipe,
+        TunnelCapability::SendFile,
+    ] {
+        let label = if capability_allowed(&state.config.policy_rules, capability) {
+            "allowed"
+        } else {
+            "denied"
+        };
+        println!("    {}: {}", capability_label(capability), label);
+    }
 
     Ok(())
 }
@@ -549,6 +604,13 @@ pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
     wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
+    if let Some(ControlResponse::Probe { peer_policy_rules, .. }) = probe_runtime(&state_path)? {
+        if !capability_allowed(&peer_policy_rules, TunnelCapability::Pipe) {
+            return Err(Error::Session(
+                "the remote tunnel policy denies pipe".into(),
+            ));
+        }
+    }
     let mode = pipe::infer_pipe_mode(config.mode)?;
     pipe::run_pipe(&state_path, mode).await
 }

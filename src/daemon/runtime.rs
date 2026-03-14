@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    cli::stderr_style,
+    cli::{stderr_style, TunnelCapability, TunnelPolicyRule},
     control::{ControlResponse, ControlServer, RuntimeControlRequest},
     daemon::protocol::{InputCommand, OutputEvent},
     error::{Error, Result},
@@ -19,7 +19,7 @@ use crate::{
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
     mux::{ChannelKind, IncomingChannel, MuxSession, MuxTransport},
     pipe::PipeMode,
-    persistent::{ManagedPortDefinition, ManagedPortForward, PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, remove_state_artifacts, runtime_status_path, save_state},
+    persistent::{ManagedPortDefinition, ManagedPortForward, PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, capability_allowed, load_state, remove_state_artifacts, runtime_status_path, save_state},
     session::{self, SessionOptions},
     shell::{ShellOpen, ShellPacket, bridge_local_shell_stream, run_remote_shell, send_channel_packet, write_stream_packet},
     status_line::StatusLine,
@@ -259,6 +259,11 @@ async fn handle_incoming_channel(
             Ok(())
         },
         ChannelKind::PortForward => {
+            ensure_policy_allows(
+                &load_state(state_path)?.config.policy_rules,
+                TunnelCapability::Ports,
+                "port forwarding",
+            )?;
             let open: PortForwardOpen = serde_json::from_slice(&incoming.open_payload)?;
             let stream = TcpStream::connect((open.connect_host.as_str(), open.connect_port))
                 .await
@@ -293,6 +298,11 @@ async fn handle_incoming_channel(
             .await
         },
         ChannelKind::Pipe => {
+            ensure_policy_allows(
+                &load_state(state_path)?.config.policy_rules,
+                TunnelCapability::Pipe,
+                "pipe",
+            )?;
             let (maybe_sender, maybe_channel) = take_pending_pipe_pair(&pipe_broker);
             match (maybe_sender, maybe_channel) {
                 (Some(local_stream), None) => {
@@ -316,6 +326,11 @@ async fn handle_incoming_channel(
             }
         },
         ChannelKind::Shell => {
+            ensure_policy_allows(
+                &load_state(state_path)?.config.policy_rules,
+                TunnelCapability::Shell,
+                "shell",
+            )?;
             let open: ShellOpen = serde_json::from_slice(&incoming.open_payload)?;
             task::spawn(async move {
                 if let Err(error) = run_remote_shell(incoming.channel.clone(), open).await {
@@ -332,6 +347,11 @@ async fn handle_incoming_channel(
             Ok(())
         },
         ChannelKind::FileTransfer => {
+            ensure_policy_allows(
+                &load_state(state_path)?.config.policy_rules,
+                TunnelCapability::SendFile,
+                "file transfer",
+            )?;
             let open: FileTransferOpen = serde_json::from_slice(&incoming.open_payload)?;
             let base_dir = std::env::current_dir().map_err(|error| {
                 Error::Session(format!("could not resolve the remote working directory: {error}"))
@@ -555,6 +575,38 @@ fn managed_remote_connect_host(forward: &ManagedPortForward) -> &str {
     forward.remote_connect_host.as_deref().unwrap_or("127.0.0.1")
 }
 
+fn ensure_policy_allows(
+    rules: &[TunnelPolicyRule],
+    capability: TunnelCapability,
+    context: &str,
+) -> Result<()> {
+    if capability_allowed(rules, capability) {
+        Ok(())
+    } else {
+        Err(Error::Session(format!(
+            "the tunnel policy denies {context} on this machine"
+        )))
+    }
+}
+
+fn ensure_peer_policy_allows(
+    peer_policy: &Arc<Mutex<Vec<TunnelPolicyRule>>>,
+    capability: TunnelCapability,
+    context: &str,
+) -> Result<()> {
+    let rules = peer_policy
+        .lock()
+        .expect("peer policy mutex poisoned")
+        .clone();
+    if capability_allowed(&rules, capability) {
+        Ok(())
+    } else {
+        Err(Error::Session(format!(
+            "the remote tunnel policy denies {context}"
+        )))
+    }
+}
+
 fn validate_managed_port_forward(forward: &ManagedPortForward) -> Result<()> {
     let local_listen = forward.local_listen_port.is_some();
     let local_connect = forward.local_connect_port.is_some();
@@ -743,8 +795,14 @@ async fn handle_remote_port_control(
     runtime_status: &PersistentRuntimeStatus,
     style: &crate::cli::AnsiStyle,
 ) -> Result<()> {
+    let local_policy = load_state(state_path)?.config.policy_rules;
     let result = match request.action {
         PortControlAction::Add { forward } => {
+            ensure_policy_allows(
+                &local_policy,
+                TunnelCapability::RemotePortMgmt,
+                "remote port management",
+            )?;
             validate_managed_port_forward(&forward)?;
             let mut state = load_state(state_path)?;
             if state.config.ports.iter().any(|existing| existing.id == forward.id) {
@@ -761,6 +819,11 @@ async fn handle_remote_port_control(
             }
         },
         PortControlAction::Remove { id } => {
+            ensure_policy_allows(
+                &local_policy,
+                TunnelCapability::RemotePortMgmt,
+                "remote port management",
+            )?;
             let mut state = load_state(state_path)?;
             state.config.ports.retain(|forward| forward.id != id);
             save_state(state_path, &state)?;
@@ -783,6 +846,7 @@ async fn handle_remote_port_control(
 async fn handle_runtime_control_request(
     request: RuntimeControlRequest,
     session: Option<MuxSession>,
+    peer_policy: Arc<Mutex<Vec<TunnelPolicyRule>>>,
     pipe_broker: Arc<PipeBroker>,
     port_broker: Arc<PortForwardBroker>,
     state_path: &Path,
@@ -802,11 +866,16 @@ async fn handle_runtime_control_request(
                     detail: Some("persistent worker is starting".into()),
                 }
             };
+            let peer_policy_rules = peer_policy
+                .lock()
+                .expect("peer policy mutex poisoned")
+                .clone();
             let _ = reply
                 .send(Ok(ControlResponse::Probe {
                     tunnel_name: state.config.name,
                     code: state.config.code,
                     runtime,
+                    peer_policy_rules,
                 }))
                 .await;
         },
@@ -837,7 +906,18 @@ async fn handle_runtime_control_request(
                     .await;
                 return Ok(());
             };
-            let forward = add_managed_port_forward(
+            let result = (|| {
+                ensure_peer_policy_allows(
+                    &peer_policy,
+                    TunnelCapability::RemotePortMgmt,
+                    "remote port management",
+                )
+            })();
+            if let Err(error) = result {
+                let _ = reply.send(Err(error)).await;
+                return Ok(());
+            }
+            match add_managed_port_forward(
                 state_path,
                 &session,
                 definition,
@@ -845,10 +925,17 @@ async fn handle_runtime_control_request(
                 runtime_status,
                 style,
             )
-            .await?;
-            let _ = reply
-                .send(Ok(ControlResponse::PortsAdded { forward }))
-                .await;
+            .await
+            {
+                Ok(forward) => {
+                    let _ = reply
+                        .send(Ok(ControlResponse::PortsAdded { forward }))
+                        .await;
+                },
+                Err(error) => {
+                    let _ = reply.send(Err(error)).await;
+                },
+            }
         },
         RuntimeControlRequest::PortsRemove { id, reply } => {
             let Some(session) = session else {
@@ -857,21 +944,40 @@ async fn handle_runtime_control_request(
                     .await;
                 return Ok(());
             };
-            remove_managed_port_forward(
+            let result = (|| {
+                ensure_peer_policy_allows(
+                    &peer_policy,
+                    TunnelCapability::RemotePortMgmt,
+                    "remote port management",
+                )
+            })();
+            if let Err(error) = result {
+                let _ = reply.send(Err(error)).await;
+                return Ok(());
+            }
+            match remove_managed_port_forward(
                 state_path,
                 &session,
                 id,
                 &port_broker,
             )
-            .await?;
-            let _ = reply
-                .send(Ok(ControlResponse::PortsRemoved { id }))
-                .await;
+            .await
+            {
+                Ok(()) => {
+                    let _ = reply
+                        .send(Ok(ControlResponse::PortsRemoved { id }))
+                        .await;
+                },
+                Err(error) => {
+                    let _ = reply.send(Err(error)).await;
+                },
+            }
         },
         RuntimeControlRequest::Pipe { mode, stream } => {
             let Some(session) = session else {
                 return Err(Error::Session("the tunnel is not connected yet".into()));
             };
+            ensure_peer_policy_allows(&peer_policy, TunnelCapability::Pipe, "pipe")?;
             match mode {
                 PipeMode::Receive => {
                     let channel = session.open_channel(ChannelKind::Pipe, Vec::new()).await?;
@@ -911,6 +1017,19 @@ async fn handle_runtime_control_request(
                 .await?;
                 return Ok(());
             };
+            if let Err(error) =
+                ensure_peer_policy_allows(&peer_policy, TunnelCapability::Shell, "shell")
+            {
+                let mut stream = stream;
+                write_stream_packet(
+                    &mut stream,
+                    &ShellPacket::Error {
+                        message: protocol_error_message(&error),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
             match session
                 .open_channel(ChannelKind::Shell, serde_json::to_vec(&open)?)
                 .await
@@ -944,6 +1063,21 @@ async fn handle_runtime_control_request(
                 .await?;
                 return Ok(());
             };
+            if let Err(error) = ensure_peer_policy_allows(
+                &peer_policy,
+                TunnelCapability::SendFile,
+                "file transfer",
+            ) {
+                let mut stream = stream;
+                write_file_stream_packet(
+                    &mut stream,
+                    &FileTransferPacket::Error {
+                        message: protocol_error_message(&error),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
             match session
                 .open_channel(ChannelKind::FileTransfer, serde_json::to_vec(&open)?)
                 .await
@@ -972,6 +1106,7 @@ async fn handle_runtime_control_request(
 async fn drive_runtime_control_requests(
     requests: Receiver<RuntimeControlRequest>,
     live_session: Arc<Mutex<Option<MuxSession>>>,
+    peer_policy: Arc<Mutex<Vec<TunnelPolicyRule>>>,
     pipe_broker: Arc<PipeBroker>,
     port_broker: Arc<PortForwardBroker>,
     state_path: PathBuf,
@@ -986,6 +1121,7 @@ async fn drive_runtime_control_requests(
         let _ = handle_runtime_control_request(
             request,
             session,
+            peer_policy.clone(),
             pipe_broker.clone(),
             port_broker.clone(),
             &state_path,
@@ -1205,12 +1341,14 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     let runtime_status = PersistentRuntimeStatus::new(&_state_path)?;
     let (control_tx, control_rx) = async_channel::unbounded::<RuntimeControlRequest>();
     let live_session = Arc::new(Mutex::new(None::<MuxSession>));
+    let peer_policy = Arc::new(Mutex::new(Vec::<TunnelPolicyRule>::new()));
     let pipe_broker = Arc::new(PipeBroker::default());
     let port_broker = Arc::new(PortForwardBroker::default());
     let _control = ControlServer::spawn(&_state_path, control_tx)?;
     task::spawn(drive_runtime_control_requests(
         control_rx,
         live_session.clone(),
+        peer_policy.clone(),
         pipe_broker.clone(),
         port_broker.clone(),
         _state_path.clone(),
@@ -1227,6 +1365,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     let intent = forward::CliIntent {
         locals: state.config.locals.clone(),
         remotes: state.config.remotes.clone(),
+        policy_rules: state.config.policy_rules.clone(),
     };
     if state.config.temporary {
         return run_temporary_tunnel(
@@ -1236,6 +1375,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             &style,
             &runtime_status,
             live_session,
+            peer_policy,
             pipe_broker,
             port_broker,
         )
@@ -1281,6 +1421,8 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             session::authenticate_persistent_peer(&mut connected, &mut state).await?;
 
             let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, &intent).await?;
+            *peer_policy.lock().expect("peer policy mutex poisoned") =
+                peer_intent.policy_rules.clone();
             let plan = forward::build_cli_plan(&intent, &peer_intent)?;
             for target in &plan.targets {
                 let detail = format!(
@@ -1338,6 +1480,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             }
             let _ = incoming_task.cancel().await;
             *live_session.lock().expect("live session mutex poisoned") = None;
+            peer_policy.lock().expect("peer policy mutex poisoned").clear();
             clear_pending_pipe_state(&pipe_broker);
             clear_managed_port_forward_state(&port_broker).await;
             transport_result
@@ -1377,6 +1520,7 @@ async fn run_temporary_tunnel(
     style: &crate::cli::AnsiStyle,
     runtime_status: &PersistentRuntimeStatus,
     live_session: Arc<Mutex<Option<MuxSession>>>,
+    peer_policy: Arc<Mutex<Vec<TunnelPolicyRule>>>,
     pipe_broker: Arc<PipeBroker>,
     port_broker: Arc<PortForwardBroker>,
 ) -> Result<()> {
@@ -1414,6 +1558,8 @@ async fn run_temporary_tunnel(
     })?;
 
     let peer_intent = forward::exchange_cli_intents(&mut connected.wormhole, intent).await?;
+    *peer_policy.lock().expect("peer policy mutex poisoned") =
+        peer_intent.policy_rules.clone();
     let plan = forward::build_cli_plan(intent, &peer_intent)?;
     for target in &plan.targets {
         let detail = format!(
@@ -1479,6 +1625,7 @@ async fn run_temporary_tunnel(
     }
     let _ = incoming_task.cancel().await;
     *live_session.lock().expect("live session mutex poisoned") = None;
+    peer_policy.lock().expect("peer policy mutex poisoned").clear();
     clear_pending_pipe_state(&pipe_broker);
     clear_managed_port_forward_state(&port_broker).await;
     result

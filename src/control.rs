@@ -37,6 +37,7 @@ pub enum ControlResponse {
         tunnel_name: String,
         code: String,
         runtime: TunnelRuntimeStatus,
+        peer_policy_rules: Vec<crate::cli::TunnelPolicyRule>,
     },
     Echo {
         payload: String,
@@ -302,6 +303,7 @@ async fn handle_stream(
                     tunnel_name: state.config.name,
                     code: state.config.code,
                     runtime: current_runtime(state_path)?,
+                    peer_policy_rules: Vec::new(),
                 })
             },
         )

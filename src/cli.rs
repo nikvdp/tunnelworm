@@ -1,5 +1,6 @@
-use clap::{builder::StyledStr, Args, Command, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{builder::StyledStr, Args, Command, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
+use serde::{Deserialize, Serialize};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -468,7 +469,64 @@ pub fn tunnelworm_completion_command() -> Command {
 
 pub fn parse_tunnelworm_cli() -> TunnelwormCli {
     let matches = tunnelworm_command().get_matches();
-    TunnelwormCli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+    let mut cli = TunnelwormCli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    populate_policy_rules(&mut cli, &matches);
+    cli
+}
+
+fn extract_policy_rules(matches: &clap::ArgMatches) -> Vec<TunnelPolicyRule> {
+    let mut ordered = Vec::new();
+    if let (Some(indices), Some(values)) =
+        (matches.indices_of("allow"), matches.get_many::<TunnelCapability>("allow"))
+    {
+        for (index, capability) in indices.zip(values) {
+            ordered.push((
+                index,
+                TunnelPolicyRule {
+                    effect: TunnelPolicyEffect::Allow,
+                    capability: *capability,
+                },
+            ));
+        }
+    }
+    if let (Some(indices), Some(values)) =
+        (matches.indices_of("deny"), matches.get_many::<TunnelCapability>("deny"))
+    {
+        for (index, capability) in indices.zip(values) {
+            ordered.push((
+                index,
+                TunnelPolicyRule {
+                    effect: TunnelPolicyEffect::Deny,
+                    capability: *capability,
+                },
+            ));
+        }
+    }
+    ordered.sort_by_key(|(index, _)| *index);
+    ordered.into_iter().map(|(_, rule)| rule).collect()
+}
+
+fn populate_policy_rules(cli: &mut TunnelwormCli, matches: &clap::ArgMatches) {
+    match cli.command.as_mut() {
+        None => {
+            cli.top_level.common.policy.ordered_rules = extract_policy_rules(matches);
+        },
+        Some(TunnelwormSubcommand::Open(args)) => {
+            if let Some(("open", submatches)) = matches.subcommand() {
+                args.policy.ordered_rules = extract_policy_rules(submatches);
+            }
+        },
+        Some(TunnelwormSubcommand::Tunnel(tunnel)) => {
+            if let Some(("tunnel", tunnel_matches)) = matches.subcommand() {
+                if let (TunnelCommand::Create(args), Some(("create", create_matches))) =
+                    (&mut tunnel.command, tunnel_matches.subcommand())
+                {
+                    args.common.policy.ordered_rules = extract_policy_rules(create_matches);
+                }
+            }
+        },
+        _ => {},
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -477,6 +535,7 @@ pub struct TunnelConfig {
     pub mailbox: Option<String>,
     pub code_length: usize,
     pub code: Option<String>,
+    pub policy_rules: Vec<TunnelPolicyRule>,
     pub locals: Vec<LocalSpec>,
     pub remotes: Vec<RemoteSpec>,
     pub state: Option<PathBuf>,
@@ -573,6 +632,31 @@ pub enum ForwardHalf {
     Mixed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+#[value(rename_all = "kebab-case")]
+pub enum TunnelCapability {
+    All,
+    Ports,
+    RemotePortMgmt,
+    Shell,
+    Pipe,
+    SendFile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TunnelPolicyEffect {
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelPolicyRule {
+    pub effect: TunnelPolicyEffect,
+    pub capability: TunnelCapability,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct AnsiStyle {
     enabled: bool,
@@ -649,11 +733,23 @@ pub struct ForwardArgs {
 }
 
 #[derive(Debug, Clone, Args, Default)]
+pub struct PolicyArgs {
+    #[arg(long = "allow", value_enum, value_name = "CAPABILITY", help = "Allow one remote capability on this machine")]
+    pub allow: Vec<TunnelCapability>,
+    #[arg(long = "deny", value_enum, value_name = "CAPABILITY", help = "Deny one remote capability on this machine")]
+    pub deny: Vec<TunnelCapability>,
+    #[arg(skip)]
+    pub ordered_rules: Vec<TunnelPolicyRule>,
+}
+
+#[derive(Debug, Clone, Args, Default)]
 pub struct CommonSessionArgs {
     #[arg(long = "mailbox", help = "Override the mailbox websocket URL")]
     pub mailbox: Option<String>,
     #[arg(long = "code-length", default_value_t = 2, help = "Number of words to allocate when creating a new code")]
     pub code_length: usize,
+    #[command(flatten)]
+    pub policy: PolicyArgs,
     #[command(flatten)]
     pub forwards: ForwardArgs,
 }
@@ -680,6 +776,8 @@ pub struct TunnelOpenArgs {
     pub mailbox: Option<String>,
     #[arg(long = "code-length", default_value_t = 2, help = "Number of words to allocate when creating a new code")]
     pub code_length: usize,
+    #[command(flatten)]
+    pub policy: PolicyArgs,
     #[arg(value_name = "CODE", help = "Existing wormhole code to join; omit it to allocate a new code")]
     pub code: Option<String>,
 }
@@ -916,6 +1014,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                 mailbox: args.mailbox,
                 code_length: args.code_length,
                 code: args.code,
+                policy_rules: args.policy.ordered_rules,
                 locals: Vec::new(),
                 remotes: Vec::new(),
                 state: None,
@@ -1026,6 +1125,7 @@ fn build_config(
         mailbox: common.mailbox,
         code_length: common.code_length,
         code,
+        policy_rules: common.policy.ordered_rules,
         locals,
         remotes,
         state,

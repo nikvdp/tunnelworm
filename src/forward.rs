@@ -8,7 +8,7 @@ use magic_wormhole::{Wormhole, forwarding};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::TunnelConfig,
+    cli::{TunnelConfig, TunnelPolicyRule},
     error::{Error, Result},
     session::ConnectedSession,
     spec::{LocalSpec, RemoteSpec},
@@ -18,6 +18,8 @@ use crate::{
 pub struct CliIntent {
     pub locals: Vec<LocalSpec>,
     pub remotes: Vec<RemoteSpec>,
+    #[serde(default)]
+    pub policy_rules: Vec<TunnelPolicyRule>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +77,7 @@ impl From<&TunnelConfig> for CliIntent {
         Self {
             locals: value.locals.clone(),
             remotes: value.remotes.clone(),
+            policy_rules: value.policy_rules.clone(),
         }
     }
 }
