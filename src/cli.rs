@@ -621,13 +621,13 @@ pub struct TunnelPortsAddConfig {
 pub struct TunnelPortsRemoveConfig {
     pub name: Option<String>,
     pub state: Option<PathBuf>,
-    pub id: u32,
+    pub id: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TunnelSendFileConfig {
-    pub name: String,
-    pub source: PathBuf,
+    pub name: Option<String>,
+    pub source: Option<PathBuf>,
     pub destination: Option<PathBuf>,
     pub overwrite: bool,
 }
@@ -944,14 +944,12 @@ pub struct TunnelDeleteArgs {
 pub struct TunnelPipeArgs {
     #[arg(
         value_name = "NAME",
-        required_unless_present = "state",
         help = "Local name of the saved tunnel endpoint to use"
     )]
     pub name: Option<String>,
     #[arg(
         long = "state",
         value_name = "PATH",
-        required_unless_present = "name",
         help = "Use an explicit persistent state file path"
     )]
     pub state: Option<PathBuf>,
@@ -973,14 +971,12 @@ pub struct TunnelPipeArgs {
 pub struct TunnelPortsListArgs {
     #[arg(
         value_name = "NAME",
-        required_unless_present = "state",
         help = "Local name of the saved tunnel endpoint to use"
     )]
     pub name: Option<String>,
     #[arg(
         long = "state",
         value_name = "PATH",
-        required_unless_present = "name",
         help = "Use an explicit persistent state file path"
     )]
     pub state: Option<PathBuf>,
@@ -992,7 +988,7 @@ pub struct TunnelPortsAddArgs {
         value_name = "NAME",
         help = "Local name of the saved tunnel endpoint to use"
     )]
-    pub name: String,
+    pub name: Option<String>,
     #[arg(
         long = "state",
         value_name = "PATH",
@@ -1031,9 +1027,9 @@ pub struct TunnelPortsRemoveArgs {
         value_name = "NAME",
         help = "Local name of the saved tunnel endpoint to use"
     )]
-    pub name: String,
+    pub name: Option<String>,
     #[arg(value_name = "ID", help = "Numeric port-forward ID to remove")]
-    pub id: u32,
+    pub id: Option<u32>,
     #[arg(
         long = "state",
         value_name = "PATH",
@@ -1082,9 +1078,9 @@ pub struct TunnelSendFileArgs {
         value_name = "NAME",
         help = "Local name of the saved tunnel endpoint to use"
     )]
-    pub name: String,
+    pub name: Option<String>,
     #[arg(value_name = "SOURCE", help = "Local file to send to the peer")]
-    pub source: PathBuf,
+    pub source: Option<PathBuf>,
     #[arg(
         value_name = "REMOTE_DEST",
         help = "Optional destination path to write on the peer"
@@ -1105,14 +1101,12 @@ pub struct TunnelSendFileArgs {
 pub struct TunnelShellArgs {
     #[arg(
         value_name = "NAME",
-        required_unless_present = "state",
         help = "Local name of the saved tunnel endpoint to use"
     )]
     pub name: Option<String>,
     #[arg(
         long = "state",
         value_name = "PATH",
-        required_unless_present = "name",
         help = "Use an explicit persistent state file path"
     )]
     pub state: Option<PathBuf>,
@@ -1211,17 +1205,10 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                 },
             })),
             Some(TunnelwormSubcommand::Ports(args)) => match args.command {
-                None => {
-                    if args.name.is_none() && args.state.is_none() {
-                        return Err(Error::Usage(
-                            "ports needs either a tunnel name or --state".into(),
-                        ));
-                    }
-                    Ok(Self::PortsList(TunnelPortsListConfig {
-                        name: args.name,
-                        state: args.state,
-                    }))
-                }
+                None => Ok(Self::PortsList(TunnelPortsListConfig {
+                    name: args.name,
+                    state: args.state,
+                })),
                 Some(TunnelPortsSubcommand::List(list)) => {
                     Ok(Self::PortsList(TunnelPortsListConfig {
                         name: list.name,
@@ -1229,7 +1216,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                     }))
                 }
                 Some(TunnelPortsSubcommand::Add(add)) => Ok(Self::PortsAdd(TunnelPortsAddConfig {
-                    name: Some(add.name),
+                    name: add.name,
                     state: add.state,
                     local_listen: add.local_listen,
                     local_connect: add.local_connect,
@@ -1238,7 +1225,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                 })),
                 Some(TunnelPortsSubcommand::Remove(remove)) => {
                     Ok(Self::PortsRemove(TunnelPortsRemoveConfig {
-                        name: Some(remove.name),
+                        name: remove.name,
                         state: remove.state,
                         id: remove.id,
                     }))

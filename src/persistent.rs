@@ -657,8 +657,12 @@ pub fn delete_named_tunnel(config: &TunnelDeleteConfig) -> Result<()> {
 pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, _state, correction) =
-        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, _state, correction) = resolve_live_tunnel_target(
+        config.state.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+        "pipe over",
+    )?;
     if let Some(correction) = correction {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
@@ -679,8 +683,12 @@ pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
 pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, _state, correction) =
-        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, _state, correction) = resolve_live_tunnel_target(
+        config.state.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+        "open a shell over",
+    )?;
     if let Some(correction) = correction {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
@@ -711,15 +719,19 @@ pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
     let (state_path, state, correction) =
-        resolve_live_tunnel_handle(None, Some(&config.name), &cwd)?;
+        resolve_live_tunnel_target(None, config.name.as_deref(), &cwd, "send a file over")?;
     if let Some(correction) = correction {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
-    wait_for_live_tunnel_ready(&state_path, Some(&config.name)).await?;
-    let source_path = if config.source.is_absolute() {
-        config.source.clone()
+    wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
+    let source = config
+        .source
+        .as_ref()
+        .ok_or_else(|| Error::Usage("send-file needs a local SOURCE file to send".into()))?;
+    let source_path = if source.is_absolute() {
+        source.clone()
     } else {
-        cwd.join(&config.source)
+        cwd.join(source)
     };
     let prepared = file_transfer::prepare_local_source(
         &source_path,
@@ -858,8 +870,12 @@ fn build_managed_port_definition(config: &TunnelPortsAddConfig) -> Result<Manage
 pub fn list_tunnel_ports(config: &TunnelPortsListConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, state, correction) =
-        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, state, correction) = resolve_live_tunnel_target(
+        config.state.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+        "list ports on",
+    )?;
     if let Some(correction) = correction {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
@@ -891,8 +907,12 @@ pub fn list_tunnel_ports(config: &TunnelPortsListConfig) -> Result<()> {
 pub async fn add_tunnel_port(config: &TunnelPortsAddConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, _state, correction) =
-        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, _state, correction) = resolve_live_tunnel_target(
+        config.state.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+        "add ports to",
+    )?;
     if let Some(correction) = correction {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
@@ -911,18 +931,25 @@ pub async fn add_tunnel_port(config: &TunnelPortsAddConfig) -> Result<()> {
 pub async fn remove_tunnel_port(config: &TunnelPortsRemoveConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, _state, correction) =
-        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, _state, correction) = resolve_live_tunnel_target(
+        config.state.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+        "remove ports from",
+    )?;
     if let Some(correction) = correction {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
+    let id = config
+        .id
+        .ok_or_else(|| Error::Usage("ports remove needs a numeric port-forward ID".into()))?;
     wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
-    remove_port_forward_runtime(&state_path, config.id)
+    remove_port_forward_runtime(&state_path, id)
         .await?
         .ok_or_else(|| {
             Error::Session("the local tunnel runtime stopped before the port was removed".into())
         })?;
-    println!("{} {}", style.heading("Removed:"), config.id);
+    println!("{} {}", style.heading("Removed:"), id);
     Ok(())
 }
 
@@ -1082,6 +1109,29 @@ fn resolve_live_tunnel_handle(
     )))
 }
 
+fn resolve_live_tunnel_target(
+    explicit: Option<&Path>,
+    handle: Option<&str>,
+    cwd: &Path,
+    action: &str,
+) -> Result<(PathBuf, PersistentState, Option<String>)> {
+    if explicit.is_some() || handle.is_some() {
+        return resolve_live_tunnel_handle(explicit, handle, cwd);
+    }
+
+    let live_names = live_tunnel_names(cwd)?;
+    if live_names.is_empty() {
+        return Err(Error::Usage(format!(
+            "no live tunnels are running locally, so there is no tunnel to {action}; start one first with `tunnelworm open` or `tunnelworm tunnel up <name>`"
+        )));
+    }
+
+    Err(Error::Usage(format!(
+        "specify which live tunnel to {action} with <NAME> or --state; live tunnels: {}",
+        live_names.join(", ")
+    )))
+}
+
 async fn wait_for_live_tunnel_ready(state_path: &Path, handle: Option<&str>) -> Result<()> {
     let style = stdout_style();
     let mut spinner = StatusLine::stdout();
@@ -1146,6 +1196,20 @@ fn find_live_temporary_state_by_code(
             code
         ))),
     }
+}
+
+fn live_tunnel_names(cwd: &Path) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    for (state_path, state) in list_saved_tunnels(cwd)? {
+        if matches!(
+            current_tunnel_runtime(&state_path)?,
+            ResolvedTunnelRuntime::Live(_)
+        ) {
+            names.push(state.config.name);
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 pub fn resolve_state_path(
