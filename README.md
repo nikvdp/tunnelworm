@@ -13,24 +13,21 @@ Think of it as the tunnelling experience of [chisel](https://github.com/jpillora
 ### Forward a port in two commands
 
 ```bash
-# machine with the service (e.g. sshd on port 22)
-tunnelworm --connect 22
+$ tunnelworm --connect 22
+2-paper-turntable
 
-# your machine — type the code that was printed
-tunnelworm --listen 9097 <CODE>
+$ tunnelworm --listen 9097 2-paper-turntable
 
-# now connect through the tunnel
-ssh -p 9097 localhost
+$ ssh -p 9097 localhost
 ```
 
 ### Open a bare tunnel and decide later
 
 ```bash
-# first machine
-tunnelworm open
+$ tunnelworm open
+5-silver-orbit
 
-# second machine
-tunnelworm open <CODE>
+$ tunnelworm open 5-silver-orbit
 ```
 
 The tunnel is live but has no port forward yet. You can use it for anything below.
@@ -80,18 +77,19 @@ One-off tunnels are great for quick tasks. If you connect the same two machines 
 ### Create both sides once
 
 ```bash
-# machine A
-tunnelworm tunnel create office
+$ tunnelworm tunnel create office
+7-cobalt-signal
 
-# machine B — use the printed code
-tunnelworm tunnel create laptop --code <CODE>
+$ tunnelworm tunnel create laptop --code 7-cobalt-signal
 ```
 
 You can include an initial port forward at creation time:
 
 ```bash
-tunnelworm tunnel create office --connect 22
-tunnelworm tunnel create laptop --listen 9097 --code <CODE>
+$ tunnelworm tunnel create office --connect 22
+4-glass-harbor
+
+$ tunnelworm tunnel create laptop --listen 9097 --code 4-glass-harbor
 ```
 
 ### Bring it up later by name
@@ -125,8 +123,10 @@ tunnelworm tunnel delete office
 If you already think in `-L` / `-R`, that works too:
 
 ```bash
-tunnelworm -R 9000:localhost:22
-tunnelworm -L 9000:localhost:22 <CODE>
+$ tunnelworm -R 9000:localhost:22
+3-quiet-pine
+
+$ tunnelworm -L 9000:localhost:22 3-quiet-pine
 ```
 
 `-L` on one side always needs a corresponding `-R` on the other.
