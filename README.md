@@ -1,59 +1,116 @@
 # tunnelworm
 
-`tunnelworm` creates direct tunnels between two machines over
-[magic-wormhole](https://magic-wormhole.readthedocs.io/).
+**Connect two machines with a short code. Forward ports, get a shell, pipe data, send files — all over one encrypted tunnel.**
 
-It grew out of the ideas behind [fowl](https://github.com/nicr9/fowl), but is
-now its own tool with a tunnel-first design.
+No public IP needed. No SSH keys to exchange. No server to run. One side prints a code, the other side types it in, and you have a tunnel.
 
-The core idea is simple: a tunnel connects two machines. TCP forwarding is just
-one thing you can do over that tunnel. Shells, pipes, file transfer, and live
-port changes all work over the same connection too.
+Think of it as the tunnelling experience of [chisel](https://github.com/jpillora/chisel) without needing a server, but with a short-code workflow that is easy to start from either side.
 
-## Two ways to create a tunnel
+---
 
-### One-off tunnels
+## Quick start
 
-Use the top-level command for a temporary tunnel that lasts one session.
-
-Forward a TCP port directly:
+### Forward a port in two commands
 
 ```bash
-# machine with the service
+# machine with the service (e.g. sshd on port 22)
 tunnelworm --connect 22
 
-# other machine, using the printed code
+# your machine — type the code that was printed
 tunnelworm --listen 9097 <CODE>
+
+# now connect through the tunnel
+ssh -p 9097 localhost
 ```
 
-Or open a bare tunnel first and decide what to do with it after it connects:
+### Open a bare tunnel and decide later
 
 ```bash
-# first side
+# first machine
 tunnelworm open
 
-# second side
+# second machine
 tunnelworm open <CODE>
 ```
 
-### Named persistent tunnels
+The tunnel is live but has no port forward yet. You can use it for anything below.
 
-Use `tunnelworm tunnel` when you want to save an endpoint locally and bring it
-back later by name.
+---
+
+## What you can do with a live tunnel
+
+Every capability here works on **any** live tunnel. Address it by the code printed at connection time. (Named tunnels, covered below, let you use a local name instead.)
+
+### Remote shell
 
 ```bash
-# creator side
-tunnelworm tunnel create office
-
-# peer side, using the printed code
-tunnelworm tunnel create laptop --code <CODE>
-
-# later, on each machine
-tunnelworm tunnel up office
-tunnelworm tunnel up laptop
+tunnelworm shell <CODE>
+tunnelworm shell <CODE> --command 'uptime'
 ```
 
-Manage saved endpoints:
+### Pipe stdin / stdout
+
+```bash
+echo hello | tunnelworm pipe <CODE>
+```
+
+### Send a file
+
+```bash
+tunnelworm send-file <CODE> ./report.txt
+tunnelworm send-file <CODE> ./report.txt /tmp/inbox/report.txt
+```
+
+### Live port management
+
+Add or remove port forwards while the tunnel is already running:
+
+```bash
+tunnelworm ports <CODE>
+tunnelworm ports add <CODE> --local-listen 9097 --remote-connect 22
+tunnelworm ports remove <CODE> 1
+```
+
+---
+
+## Named persistent tunnels
+
+One-off tunnels are great for quick tasks. If you connect the same two machines regularly, save the tunnel so you can bring it back by name instead of exchanging a new code each time.
+
+### Create both sides once
+
+```bash
+# machine A
+tunnelworm tunnel create office
+
+# machine B — use the printed code
+tunnelworm tunnel create laptop --code <CODE>
+```
+
+You can include an initial port forward at creation time:
+
+```bash
+tunnelworm tunnel create office --connect 22
+tunnelworm tunnel create laptop --listen 9097 --code <CODE>
+```
+
+### Bring it up later by name
+
+```bash
+tunnelworm tunnel up office    # on machine A
+tunnelworm tunnel up laptop    # on machine B
+```
+
+### Use the named tunnel like any other
+
+```bash
+tunnelworm shell office
+echo hello | tunnelworm pipe office
+tunnelworm send-file office ./data.csv
+tunnelworm ports add office --local-listen 8080 --remote-connect 80
+```
+
+### Manage saved tunnels
 
 ```bash
 tunnelworm tunnel list
@@ -61,96 +118,24 @@ tunnelworm tunnel status office
 tunnelworm tunnel delete office
 ```
 
-## What you can do with any live tunnel
+---
 
-Every capability below works with both one-off and named tunnels. For a named
-endpoint, use its local name. For a live one-off tunnel, you can use its code.
+## SSH-style compatibility
 
-### TCP port forwarding
-
-Set up a forward at creation time:
-
-```bash
-# service side
-tunnelworm --connect 22
-
-# client side
-tunnelworm --listen 9097 <CODE>
-```
-
-Or add and remove forwards while a tunnel is running:
-
-```bash
-tunnelworm ports office
-tunnelworm ports add office --local-listen 9097 --remote-connect 22
-tunnelworm ports remove office 1
-```
-
-### Remote shell
-
-```bash
-tunnelworm shell office
-tunnelworm shell office --command 'pwd'
-```
-
-### Pipe stdin/stdout
-
-```bash
-echo hello | tunnelworm pipe office
-```
-
-### Send a file
-
-```bash
-tunnelworm send-file office ./report.txt
-tunnelworm send-file office ./report.txt /tmp/inbox/report.txt
-```
-
-## Quick examples
-
-### Forward SSH from another machine
-
-```bash
-# machine with sshd
-tunnelworm --connect 22
-
-# your machine
-tunnelworm --listen 9097 <CODE>
-ssh -p 9097 localhost
-```
-
-### Open a tunnel, then get a shell with no port forward
-
-```bash
-# first side
-tunnelworm open
-
-# second side
-tunnelworm open <CODE>
-
-# either side, while the tunnel is live
-tunnelworm shell <CODE>
-```
-
-### Send a file over a named tunnel
-
-```bash
-tunnelworm send-file office ./report.txt
-```
-
-## Compatibility syntax
-
-The preferred interface uses `--listen` and `--connect`, but SSH-style flags
-are also accepted for one-off forwarding:
+If you already think in `-L` / `-R`, that works too:
 
 ```bash
 tunnelworm -R 9000:localhost:22
 tunnelworm -L 9000:localhost:22 <CODE>
 ```
 
+`-L` on one side always needs a corresponding `-R` on the other.
+
+---
+
 ## Install and update
 
-Download a release binary for your platform from GitHub Releases.
+Download a release binary from this repository's GitHub Releases page.
 
 Update in place:
 
@@ -158,10 +143,18 @@ Update in place:
 tunnelworm self-update
 ```
 
-## Shell completion
+### Shell completion
 
 ```bash
 tunnelworm completion zsh
 ```
 
-Supported shells: `bash`, `zsh`, `fish`, `elvish`, and `powershell`.
+Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+
+---
+
+## Background
+
+tunnelworm uses [magic-wormhole](https://magic-wormhole.readthedocs.io/) under the hood to establish the connection between the two sides and provide the short human-readable codes.
+
+The project grew out of the ideas behind [fowl](https://github.com/nicr9/fowl) but is now its own tool with a tunnel-first design: the tunnel is the primitive, and forwarding, shells, pipes, and file transfer are all capabilities layered on top of it.
