@@ -7,7 +7,7 @@ COPY .cargo ./.cargo
 COPY src ./src
 COPY xtask ./xtask
 
-RUN cargo build --locked --release --bin tunnelworm --bin tunnelwormd
+RUN cargo build --locked --release --bin tunnelworm
 
 FROM debian:bookworm-slim
 
@@ -18,6 +18,5 @@ RUN apt-get update \
 WORKDIR /work
 
 COPY --from=builder /app/target/release/tunnelworm /usr/local/bin/tunnelworm
-COPY --from=builder /app/target/release/tunnelwormd /usr/local/bin/tunnelwormd
 
 ENTRYPOINT ["/usr/local/bin/tunnelworm"]
