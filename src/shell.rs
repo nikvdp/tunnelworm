@@ -3,7 +3,6 @@ use std::{io::IsTerminal, sync::mpsc, thread, time::Duration};
 use async_channel::Sender;
 use async_std::{
     io::{self, ReadExt, WriteExt},
-    os::unix::net::UnixStream,
     task,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
@@ -13,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Error, Result},
+    local_control::AsyncStream,
     mux::MuxChannel,
 };
 
@@ -33,7 +33,7 @@ pub enum ShellPacket {
     Error { message: String },
 }
 
-pub async fn bridge_local_shell_stream(stream: UnixStream, channel: MuxChannel) -> Result<()> {
+pub async fn bridge_local_shell_stream(stream: AsyncStream, channel: MuxChannel) -> Result<()> {
     let mut reader = stream.clone();
     let mut writer = stream;
     let send_channel = channel.clone();
@@ -68,7 +68,7 @@ pub async fn bridge_local_shell_stream(stream: UnixStream, channel: MuxChannel) 
     Ok(())
 }
 
-pub async fn run_local_shell_client(stream: UnixStream) -> Result<u32> {
+pub async fn run_local_shell_client(stream: AsyncStream) -> Result<u32> {
     let stdin_tty = std::io::stdin().is_terminal();
     let stdout_tty = std::io::stdout().is_terminal();
     let _raw_mode = if stdin_tty && stdout_tty {

@@ -6,7 +6,6 @@ use std::{
 
 use async_std::{
     io::{ReadExt, WriteExt},
-    os::unix::net::UnixStream,
     task,
 };
 use serde::{Deserialize, Serialize};
@@ -14,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     control::ControlRequest,
     error::{Error, Result},
+    local_control::AsyncStream,
     mux::MuxChannel,
 };
 
@@ -44,7 +44,7 @@ pub struct LocalFileTransferSource {
     pub bytes: u64,
 }
 
-pub async fn bridge_local_file_stream(stream: UnixStream, channel: MuxChannel) -> Result<()> {
+pub async fn bridge_local_file_stream(stream: AsyncStream, channel: MuxChannel) -> Result<()> {
     let mut reader = stream.clone();
     let mut writer = stream;
     let send_channel = channel.clone();
@@ -131,7 +131,7 @@ pub async fn run_remote_receive(
 }
 
 pub async fn run_local_send(
-    mut stream: UnixStream,
+    mut stream: AsyncStream,
     source_path: &Path,
     open: FileTransferOpen,
     total_bytes: u64,

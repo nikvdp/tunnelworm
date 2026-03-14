@@ -693,14 +693,13 @@ pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
     wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
-    let mut stream =
-        async_std::os::unix::net::UnixStream::connect(control_socket_path(&state_path))
-            .await
-            .map_err(|error| {
-                Error::Session(format!(
-                    "could not connect to the local tunnel control socket: {error}"
-                ))
-            })?;
+    let mut stream = crate::local_control::connect_async(&state_path)
+        .await
+        .map_err(|error| {
+            Error::Session(format!(
+                "could not connect to the local tunnel control socket: {error}"
+            ))
+        })?;
     let (rows, cols) = shell::current_terminal_size();
     let request = serde_json::to_string(&crate::control::ControlRequest::Shell {
         open: ShellOpen {
@@ -741,7 +740,7 @@ pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
             .map(|path| path.to_string_lossy().into_owned()),
         config.overwrite,
     )?;
-    let stream = async_std::os::unix::net::UnixStream::connect(control_socket_path(&state_path))
+    let stream = crate::local_control::connect_async(&state_path)
         .await
         .map_err(|error| {
             Error::Session(format!(
@@ -1740,7 +1739,7 @@ pub fn remove_state_artifacts(state_path: &Path) {
     let _ = fs::remove_file(state_path);
     let _ = fs::remove_file(state_path.with_extension("lock"));
     let _ = fs::remove_file(runtime_status_path(state_path));
-    let _ = fs::remove_file(control_socket_path(state_path));
+    crate::local_control::cleanup_endpoint(state_path);
 }
 
 #[cfg(test)]

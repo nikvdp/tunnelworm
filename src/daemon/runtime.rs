@@ -90,7 +90,7 @@ struct PortForwardOpen {
 
 #[derive(Default)]
 struct PipeBroker {
-    pending_sender: Mutex<Option<async_std::os::unix::net::UnixStream>>,
+    pending_sender: Mutex<Option<crate::local_control::AsyncStream>>,
     pending_channel: Mutex<Option<crate::mux::MuxChannel>>,
 }
 
@@ -497,7 +497,7 @@ async fn drive_listener(
 
 async fn attach_pipe_stream(
     mode: PipeMode,
-    local_stream: async_std::os::unix::net::UnixStream,
+    local_stream: crate::local_control::AsyncStream,
     channel: crate::mux::MuxChannel,
 ) {
     let _ = match mode {
@@ -507,7 +507,7 @@ async fn attach_pipe_stream(
 }
 
 async fn pump_local_to_channel(
-    mut local_stream: async_std::os::unix::net::UnixStream,
+    mut local_stream: crate::local_control::AsyncStream,
     channel: crate::mux::MuxChannel,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 16 * 1024];
@@ -523,7 +523,7 @@ async fn pump_local_to_channel(
 
 async fn pump_channel_to_local(
     channel: crate::mux::MuxChannel,
-    mut local_stream: async_std::os::unix::net::UnixStream,
+    mut local_stream: crate::local_control::AsyncStream,
 ) -> Result<()> {
     while let Some(payload) = channel.recv().await? {
         local_stream.write_all(&payload).await?;
@@ -534,7 +534,7 @@ async fn pump_channel_to_local(
 
 fn queue_pipe_sender(
     broker: &Arc<PipeBroker>,
-    stream: async_std::os::unix::net::UnixStream,
+    stream: crate::local_control::AsyncStream,
 ) -> Result<()> {
     let mut pending_sender = broker
         .pending_sender
@@ -566,7 +566,7 @@ fn queue_pipe_channel(broker: &Arc<PipeBroker>, channel: crate::mux::MuxChannel)
 fn take_pending_pipe_pair(
     broker: &Arc<PipeBroker>,
 ) -> (
-    Option<async_std::os::unix::net::UnixStream>,
+    Option<crate::local_control::AsyncStream>,
     Option<crate::mux::MuxChannel>,
 ) {
     let mut pending_sender = broker

@@ -1,12 +1,13 @@
 use std::io::IsTerminal;
 
-use async_std::{io, os::unix::net::UnixStream, prelude::*};
+use async_std::{io, prelude::*};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     cli::stderr_style,
-    control::{ControlRequest, control_socket_path},
+    control::ControlRequest,
     error::{Error, Result},
+    local_control,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,7 +46,7 @@ pub fn infer_pipe_mode_from_terminals(
 }
 
 pub async fn run_pipe(state_path: &std::path::Path, mode: PipeMode) -> Result<()> {
-    let mut stream = UnixStream::connect(control_socket_path(state_path))
+    let mut stream = local_control::connect_async(state_path)
         .await
         .map_err(|error| {
             Error::Session(format!(

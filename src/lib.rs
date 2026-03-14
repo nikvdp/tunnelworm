@@ -4,6 +4,7 @@ pub mod daemon;
 pub mod error;
 pub mod file_transfer;
 pub mod forward;
+pub mod local_control;
 pub mod mux;
 pub mod persistent;
 pub mod persistent_auth;

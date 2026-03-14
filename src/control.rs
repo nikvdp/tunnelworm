@@ -1,5 +1,5 @@
 use async_channel::Sender;
-use async_std::{io::prelude::*, os::unix::net::UnixListener, task};
+use async_std::{io::prelude::*, task};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -9,6 +9,7 @@ use std::{
 use crate::{
     error::{Error, Result},
     file_transfer::FileTransferOpen,
+    local_control,
     persistent::{
         ManagedPortDefinition, ManagedPortForward, TunnelRuntimePhase, TunnelRuntimeStatus,
         load_state, runtime_status_path,
@@ -71,15 +72,15 @@ pub enum RuntimeControlRequest {
     },
     Pipe {
         mode: PipeMode,
-        stream: async_std::os::unix::net::UnixStream,
+        stream: local_control::AsyncStream,
     },
     Shell {
         open: ShellOpen,
-        stream: async_std::os::unix::net::UnixStream,
+        stream: local_control::AsyncStream,
     },
     SendFile {
         open: FileTransferOpen,
-        stream: async_std::os::unix::net::UnixStream,
+        stream: local_control::AsyncStream,
     },
 }
 
@@ -90,17 +91,10 @@ pub struct ControlServer {
 impl ControlServer {
     pub fn spawn(state_path: &Path, requests: Sender<RuntimeControlRequest>) -> Result<Self> {
         let socket_path = control_socket_path(state_path);
-        if let Some(parent) = socket_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        if socket_path.exists() {
-            let _ = fs::remove_file(&socket_path);
-        }
-
-        let listener = task::block_on(UnixListener::bind(&socket_path))?;
+        let listener = local_control::bind_listener(state_path)?;
         let state_path = state_path.to_path_buf();
         task::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
+            while let Ok(stream) = local_control::accept(&listener).await {
                 let state_path = state_path.clone();
                 let requests = requests.clone();
                 task::spawn(async move {
@@ -125,7 +119,7 @@ pub fn probe_runtime(state_path: &Path) -> Result<Option<ControlResponse>> {
         return Ok(None);
     }
 
-    let stream = match std::os::unix::net::UnixStream::connect(&socket_path) {
+    let stream = match local_control::connect_sync(state_path) {
         Ok(stream) => stream,
         Err(error) if is_stale_control_socket(&error) => return Ok(None),
         Err(error) => {
@@ -137,22 +131,10 @@ pub fn probe_runtime(state_path: &Path) -> Result<Option<ControlResponse>> {
     };
     let mut request = serde_json::to_vec(&ControlRequest::Probe {})?;
     request.push(b'\n');
-    {
-        use std::io::Write;
-        let mut writer = &stream;
-        writer.write_all(&request)?;
-        writer.flush()?;
-    }
-
-    let mut reader = std::io::BufReader::new(stream);
-    let mut line = String::new();
-    use std::io::BufRead;
-    reader.read_line(&mut line)?;
-    if line.trim().is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(serde_json::from_str(&line)?))
+    local_control::write_request_sync(&stream, &request)?;
+    Ok(local_control::read_response_line_sync(stream)?
+        .map(|line| serde_json::from_str(&line))
+        .transpose()?)
 }
 
 pub async fn echo_runtime(state_path: &Path, payload: &str) -> Result<Option<String>> {
@@ -161,7 +143,7 @@ pub async fn echo_runtime(state_path: &Path, payload: &str) -> Result<Option<Str
         return Ok(None);
     }
 
-    let mut stream = match async_std::os::unix::net::UnixStream::connect(&socket_path).await {
+    let mut stream = match local_control::connect_async(state_path).await {
         Ok(stream) => stream,
         Err(error) if is_stale_control_socket(&error) => return Ok(None),
         Err(error) => {
@@ -175,8 +157,7 @@ pub async fn echo_runtime(state_path: &Path, payload: &str) -> Result<Option<Str
         payload: payload.to_string(),
     })?;
     request.push(b'\n');
-    stream.write_all(&request).await?;
-    stream.flush().await?;
+    local_control::write_request_async(&mut stream, &request).await?;
 
     let line = read_request_line(&mut stream).await?;
     if line.trim().is_empty() {
@@ -203,7 +184,7 @@ pub async fn add_port_forward_runtime(
         return Ok(None);
     }
 
-    let mut stream = match async_std::os::unix::net::UnixStream::connect(&socket_path).await {
+    let mut stream = match local_control::connect_async(state_path).await {
         Ok(stream) => stream,
         Err(error) if is_stale_control_socket(&error) => return Ok(None),
         Err(error) => {
@@ -217,8 +198,7 @@ pub async fn add_port_forward_runtime(
         definition: definition.clone(),
     })?;
     request.push(b'\n');
-    stream.write_all(&request).await?;
-    stream.flush().await?;
+    local_control::write_request_async(&mut stream, &request).await?;
 
     let line = read_request_line(&mut stream).await?;
     if line.trim().is_empty() {
@@ -241,7 +221,7 @@ pub async fn remove_port_forward_runtime(state_path: &Path, id: u32) -> Result<O
         return Ok(None);
     }
 
-    let mut stream = match async_std::os::unix::net::UnixStream::connect(&socket_path).await {
+    let mut stream = match local_control::connect_async(state_path).await {
         Ok(stream) => stream,
         Err(error) if is_stale_control_socket(&error) => return Ok(None),
         Err(error) => {
@@ -253,8 +233,7 @@ pub async fn remove_port_forward_runtime(state_path: &Path, id: u32) -> Result<O
     };
     let mut request = serde_json::to_vec(&ControlRequest::PortsRemove { id })?;
     request.push(b'\n');
-    stream.write_all(&request).await?;
-    stream.flush().await?;
+    local_control::write_request_async(&mut stream, &request).await?;
 
     let line = read_request_line(&mut stream).await?;
     if line.trim().is_empty() {
@@ -272,23 +251,15 @@ pub async fn remove_port_forward_runtime(state_path: &Path, id: u32) -> Result<O
 }
 
 fn is_stale_control_socket(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
-    )
+    local_control::stale_connect_error(error)
 }
 
 pub fn control_socket_path(state_path: &Path) -> PathBuf {
-    std::env::temp_dir()
-        .join("tunnelworm-control")
-        .join(format!(
-            "{:016x}.sock",
-            fnv1a64(state_path.to_string_lossy().as_bytes())
-        ))
+    local_control::endpoint_path(state_path)
 }
 
 async fn handle_stream(
-    mut stream: async_std::os::unix::net::UnixStream,
+    mut stream: local_control::AsyncStream,
     state_path: &Path,
     requests: Sender<RuntimeControlRequest>,
 ) -> Result<()> {
@@ -397,7 +368,10 @@ async fn handle_stream(
     Ok(())
 }
 
-async fn read_request_line(stream: &mut async_std::os::unix::net::UnixStream) -> Result<String> {
+async fn read_request_line<S>(stream: &mut S) -> Result<String>
+where
+    S: async_std::io::Read + Unpin,
+{
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -450,15 +424,6 @@ fn current_runtime(state_path: &Path) -> Result<TunnelRuntimeStatus> {
     }
     let bytes = fs::read(&runtime_path)?;
     Ok(serde_json::from_slice(&bytes)?)
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
 }
 
 #[cfg(test)]
