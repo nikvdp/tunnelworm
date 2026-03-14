@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use crate::{
-    cli::{stdout_style, FowlConfig},
+    cli::{stdout_style, TunnelConfig},
     error::{Error, Result},
     forward::{self, CliIntent, ForwardEvent},
     persistent::PersistentState,
@@ -45,8 +45,8 @@ pub struct ConnectedSession {
     pub relay_hints: Vec<RelayHint>,
 }
 
-impl From<&FowlConfig> for SessionOptions {
-    fn from(value: &FowlConfig) -> Self {
+impl From<&TunnelConfig> for SessionOptions {
+    fn from(value: &TunnelConfig) -> Self {
         Self {
             mailbox: value.mailbox.clone(),
             code_length: value.code_length,
@@ -200,7 +200,7 @@ pub async fn authenticate_persistent_peer(
     persistent_auth::authenticate(&mut session.wormhole, state).await
 }
 
-pub async fn run_fowl(config: FowlConfig) -> Result<()> {
+pub async fn run_one_off(config: TunnelConfig) -> Result<()> {
     let style = stdout_style();
     let prepared = prepare_session(SessionOptions::from(&config)).await?;
     if prepared.code_was_allocated || config.code.is_some() {
@@ -264,6 +264,6 @@ pub async fn run_fowl(config: FowlConfig) -> Result<()> {
     .await
 }
 
-pub async fn run_fowld() -> Result<()> {
+pub async fn run_daemon_placeholder() -> Result<()> {
     Err(Error::NotImplemented("tunnelwormd runtime"))
 }

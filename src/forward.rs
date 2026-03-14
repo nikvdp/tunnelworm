@@ -8,7 +8,7 @@ use magic_wormhole::{Wormhole, forwarding};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::FowlConfig,
+    cli::TunnelConfig,
     error::{Error, Result},
     session::ConnectedSession,
     spec::{LocalSpec, RemoteSpec},
@@ -70,8 +70,8 @@ impl Side {
     }
 }
 
-impl From<&FowlConfig> for CliIntent {
-    fn from(value: &FowlConfig) -> Self {
+impl From<&TunnelConfig> for CliIntent {
+    fn from(value: &TunnelConfig) -> Self {
         Self {
             locals: value.locals.clone(),
             remotes: value.remotes.clone(),

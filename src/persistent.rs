@@ -12,7 +12,7 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, FowlConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
+    cli::{stdout_style, TunnelConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
     control::{ControlResponse, control_socket_path, probe_runtime},
     error::{Error, Result},
     file_transfer,
@@ -122,14 +122,14 @@ impl PersistentState {
 }
 
 impl PersistentConfig {
-    pub fn from_fowl_config(config: &FowlConfig) -> Result<Self> {
+    pub fn from_tunnel_config(config: &TunnelConfig) -> Result<Self> {
         let code = config.code.clone().ok_or_else(|| {
             Error::Usage("persistent mode requires an explicit wormhole code on the joining side".into())
         })?;
-        Ok(Self::from_fowl_join_config(config, code))
+        Ok(Self::from_join_config(config, code))
     }
 
-    pub fn from_fowl_join_config(config: &FowlConfig, code: String) -> Self {
+    pub fn from_join_config(config: &TunnelConfig, code: String) -> Self {
         Self {
             name: persistent_name(config, &code),
             code,
@@ -140,7 +140,7 @@ impl PersistentConfig {
         }
     }
 
-    pub fn from_fowl_allocate_config(config: &FowlConfig, code: String) -> Self {
+    pub fn from_allocate_config(config: &TunnelConfig, code: String) -> Self {
         Self {
             name: persistent_name(config, &code),
             code,
@@ -152,7 +152,7 @@ impl PersistentConfig {
     }
 }
 
-pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
+pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
     let tunnel_name = config
@@ -176,7 +176,7 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
     }
 
     if let Some(code) = &config.code {
-        let expected = PersistentConfig::from_fowl_join_config(config, code.clone());
+        let expected = PersistentConfig::from_join_config(config, code.clone());
         let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
         print_tunnel_intro(&style, "Tunnel create:", &expected.code, config);
         print_state_block(&style, config, &state_path, &expected.code);
@@ -222,7 +222,7 @@ pub async fn create_named_tunnel(config: &FowlConfig) -> Result<()> {
     }
 
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
-    let expected = PersistentConfig::from_fowl_allocate_config(config, prepared.code.clone());
+    let expected = PersistentConfig::from_allocate_config(config, prepared.code.clone());
     let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
     print_tunnel_intro(&style, "Tunnel create:", &prepared.code, config);
     print_state_block(&style, config, &state_path, &prepared.code);
@@ -260,7 +260,7 @@ pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
     let (state_path, state) = resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
-    let replay_config = FowlConfig {
+    let replay_config = TunnelConfig {
         tunnel_name: Some(state.config.name.clone()),
         mailbox: state.config.mailbox.clone(),
         code_length: 2,
@@ -480,7 +480,7 @@ pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
     Ok(())
 }
 
-fn find_existing_creator_state(cwd: &Path, config: &FowlConfig) -> Result<Option<(PathBuf, PersistentState)>> {
+fn find_existing_creator_state(cwd: &Path, config: &TunnelConfig) -> Result<Option<(PathBuf, PersistentState)>> {
     let mut matches = Vec::new();
     for dir in [project_state_dir(cwd), user_state_dir()?] {
         if !dir.exists() {
@@ -527,7 +527,7 @@ fn find_state_by_name(cwd: &Path, name: &str) -> Result<Option<(PathBuf, Persist
     }
 }
 
-fn matches_creator_config(state: &PersistentState, config: &FowlConfig) -> bool {
+fn matches_creator_config(state: &PersistentState, config: &TunnelConfig) -> bool {
     state.version == STATE_VERSION
         && state.config.role == PersistentRole::Allocate
         && state.config.mailbox == config.mailbox
@@ -858,7 +858,7 @@ fn print_tunnel_intro(
     style: &crate::cli::AnsiStyle,
     heading: &str,
     code: &str,
-    config: &FowlConfig,
+    config: &TunnelConfig,
 ) {
     println!("{} {}", style.heading(heading), code);
     if let Some(tunnel_name) = &config.tunnel_name {
@@ -891,7 +891,7 @@ fn print_tunnel_intro(
     }
 }
 
-fn persistent_name(config: &FowlConfig, code: &str) -> String {
+fn persistent_name(config: &TunnelConfig, code: &str) -> String {
     config
         .tunnel_name
         .clone()
@@ -919,7 +919,7 @@ fn slugify_tunnel_name(name: &str) -> String {
 
 fn print_state_block(
     style: &crate::cli::AnsiStyle,
-    config: &FowlConfig,
+    config: &TunnelConfig,
     state_path: &Path,
     code: &str,
 ) {
@@ -947,7 +947,7 @@ fn print_state_block(
         println!(
             "  {} {}",
             style.label("reuse:"),
-            FowlConfig::persistent_reuse_command(state_path)
+            TunnelConfig::persistent_reuse_command(state_path)
         );
     }
     if let Some(reset_command) = config.persistent_reset_command(code) {

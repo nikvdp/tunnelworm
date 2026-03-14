@@ -21,7 +21,7 @@ async fn main() {
     let mut shell_exit_code: Option<u32> = None;
 
     let result = match invocation {
-        TunnelwormInvocation::Run(config) => tunnelworm::session::run_fowl(config).await,
+        TunnelwormInvocation::Run(config) => tunnelworm::session::run_one_off(config).await,
         TunnelwormInvocation::Completion(shell) => {
             let mut command = tunnelworm_completion_command();
             let name = command.get_name().to_string();

@@ -405,7 +405,7 @@ pub fn parse_tunnelworm_cli() -> TunnelwormCli {
 }
 
 #[derive(Debug, Clone)]
-pub struct FowlConfig {
+pub struct TunnelConfig {
     pub tunnel_name: Option<String>,
     pub mailbox: Option<String>,
     pub code_length: usize,
@@ -458,13 +458,13 @@ pub struct TunnelSendFileConfig {
 
 #[derive(Debug, Clone)]
 pub enum TunnelwormInvocation {
-    Run(FowlConfig),
+    Run(TunnelConfig),
     Completion(Shell),
     SelfUpdate,
     Pipe(TunnelPipeConfig),
     SendFile(TunnelSendFileConfig),
     Shell(TunnelShellConfig),
-    TunnelCreate(FowlConfig),
+    TunnelCreate(TunnelConfig),
     TunnelUp(TunnelUpConfig),
     TunnelList,
     TunnelStatus(TunnelStatusConfig),
@@ -527,14 +527,14 @@ pub struct ForwardArgs {
         long = "local",
         short = 'L',
         value_name = "SPEC",
-        help = "Accept local listeners with fowl syntax or SSH syntax [bind_address:]port:host:hostport"
+        help = "Accept local listeners with tunnelworm syntax or SSH syntax [bind_address:]port:host:hostport"
     )]
     pub local: Vec<String>,
     #[arg(
         long = "remote",
         short = 'R',
         value_name = "SPEC",
-        help = "Offer remote listeners with fowl syntax or SSH syntax [bind_address:]port:host:hostport"
+        help = "Offer remote listeners with tunnelworm syntax or SSH syntax [bind_address:]port:host:hostport"
     )]
     pub remote: Vec<String>,
     #[arg(
@@ -698,7 +698,7 @@ pub struct TunnelShellArgs {
 #[command(subcommand_precedence_over_arg = true)]
 pub struct TunnelwormCli {
     #[command(subcommand)]
-    pub command: Option<FowlSubcommand>,
+    pub command: Option<TunnelwormSubcommand>,
     #[command(flatten)]
     pub top_level: TopLevelArgs,
 }
@@ -713,13 +713,13 @@ pub struct TunnelwormCli {
 #[command(subcommand_precedence_over_arg = true)]
 pub struct TunnelwormCompletionCli {
     #[command(subcommand)]
-    pub command: Option<FowlSubcommand>,
+    pub command: Option<TunnelwormSubcommand>,
     #[command(flatten)]
     pub top_level: CompletionTopLevelArgs,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum FowlSubcommand {
+pub enum TunnelwormSubcommand {
     Completion(CompletionArgs),
     SelfUpdate(SelfUpdateArgs),
     Pipe(TunnelPipeArgs),
@@ -747,9 +747,9 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
 
     fn try_from(value: TunnelwormCli) -> Result<Self> {
         match value.command {
-            Some(FowlSubcommand::Completion(args)) => Ok(Self::Completion(args.shell)),
-            Some(FowlSubcommand::SelfUpdate(_)) => Ok(Self::SelfUpdate),
-            Some(FowlSubcommand::Pipe(args)) => Ok(Self::Pipe(TunnelPipeConfig {
+            Some(TunnelwormSubcommand::Completion(args)) => Ok(Self::Completion(args.shell)),
+            Some(TunnelwormSubcommand::SelfUpdate(_)) => Ok(Self::SelfUpdate),
+            Some(TunnelwormSubcommand::Pipe(args)) => Ok(Self::Pipe(TunnelPipeConfig {
                 name: args.name,
                 state: args.state,
                 mode: if args.send {
@@ -760,18 +760,18 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                     None
                 },
             })),
-            Some(FowlSubcommand::SendFile(args)) => Ok(Self::SendFile(TunnelSendFileConfig {
+            Some(TunnelwormSubcommand::SendFile(args)) => Ok(Self::SendFile(TunnelSendFileConfig {
                 name: args.name,
                 source: args.source,
                 destination: args.destination,
                 overwrite: args.overwrite,
             })),
-            Some(FowlSubcommand::Shell(args)) => Ok(Self::Shell(TunnelShellConfig {
+            Some(TunnelwormSubcommand::Shell(args)) => Ok(Self::Shell(TunnelShellConfig {
                 name: args.name,
                 state: args.state,
                 command: args.command,
             })),
-            Some(FowlSubcommand::Tunnel(tunnel)) => match tunnel.command {
+            Some(TunnelwormSubcommand::Tunnel(tunnel)) => match tunnel.command {
                 TunnelCommand::Create(args) => Ok(Self::TunnelCreate(build_config(
                     args.common,
                     args.code,
@@ -813,14 +813,14 @@ fn build_config(
     overwrite: bool,
     allow_empty_forwards: bool,
     tunnel_name: Option<String>,
-) -> Result<FowlConfig> {
+) -> Result<TunnelConfig> {
     let (locals, remotes) = parse_forward_args(common.forwards, allow_empty_forwards)?;
 
     if common.code_length == 0 {
         return Err(Error::Usage("code length must be at least 1".into()));
     }
 
-    Ok(FowlConfig {
+    Ok(TunnelConfig {
         tunnel_name,
         mailbox: common.mailbox,
         code_length: common.code_length,
@@ -867,9 +867,9 @@ fn parse_forward_args(
     Ok((locals, remotes))
 }
 
-impl FowlConfig {
+impl TunnelConfig {
     pub fn persistent_config(&self) -> Result<PersistentConfig> {
-        PersistentConfig::from_fowl_config(self)
+        PersistentConfig::from_tunnel_config(self)
     }
 
     pub fn local_half(&self) -> ForwardHalf {
