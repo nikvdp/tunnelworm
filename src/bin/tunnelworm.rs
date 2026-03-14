@@ -1,10 +1,11 @@
 use clap_complete::generate;
 use std::env;
+use std::ffi::OsString;
 use std::io::{self, ErrorKind, Write};
 
 use tunnelworm::{
     cli::{
-        TunnelwormInvocation, parse_tunnelworm_cli, stderr_style, tunnelworm_command,
+        TunnelwormInvocation, stderr_style, try_parse_tunnelworm_cli_from, tunnelworm_command,
         tunnelworm_completion_command,
     },
     persistent,
@@ -12,20 +13,17 @@ use tunnelworm::{
 
 #[async_std::main]
 async fn main() {
-    if env::args_os().nth(1).is_none() {
-        let mut command = tunnelworm_command();
-        command
-            .print_long_help()
-            .expect("top-level help should render");
-        println!();
-        return;
-    }
+    let raw_args: Vec<OsString> = env::args_os().collect();
 
-    let args = parse_tunnelworm_cli();
+    let args = match try_parse_tunnelworm_cli_from(raw_args.clone()) {
+        Ok(args) => args,
+        Err(error) => exit_with_clap_error_and_help(error, &raw_args[1..]),
+    };
     let invocation = match TunnelwormInvocation::try_from(args) {
         Ok(invocation) => invocation,
         Err(error) => {
             eprintln!("{} {error}", stderr_style().error("Error:"));
+            print_matching_help(&raw_args[1..]);
             std::process::exit(2);
         }
     };
@@ -86,4 +84,45 @@ async fn main() {
     if let Some(code) = shell_exit_code {
         std::process::exit(code as i32);
     }
+}
+
+fn exit_with_clap_error_and_help(error: clap::Error, args: &[OsString]) -> ! {
+    let kind = error.kind();
+    error.print().expect("clap errors should print");
+    if matches!(
+        kind,
+        clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+    ) {
+        std::process::exit(0);
+    }
+    eprintln!();
+    print_matching_help(args);
+    std::process::exit(2);
+}
+
+fn print_matching_help(args: &[OsString]) {
+    let mut command = matching_help_command(args);
+    command
+        .write_long_help(&mut io::stderr())
+        .expect("help text should render");
+    eprintln!();
+}
+
+fn matching_help_command(args: &[OsString]) -> clap::Command {
+    let mut command = tunnelworm_command();
+    for arg in args {
+        let Some(token) = arg.to_str() else {
+            break;
+        };
+        if token.starts_with('-') {
+            continue;
+        }
+        let Some(next) = command.get_subcommands().find(|sub| {
+            sub.get_name() == token || sub.get_all_aliases().any(|alias| alias == token)
+        }) else {
+            break;
+        };
+        command = next.clone();
+    }
+    command
 }
