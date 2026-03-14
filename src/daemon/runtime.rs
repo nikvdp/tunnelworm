@@ -19,7 +19,7 @@ use crate::{
     forward::{self, ForwardEvent, ForwardPlan, ListenerPlan, TargetPlan},
     mux::{ChannelKind, IncomingChannel, MuxSession, MuxTransport},
     pipe::PipeMode,
-    persistent::{PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, remove_state_artifacts, runtime_status_path, save_state},
+    persistent::{ManagedPortDefinition, ManagedPortForward, PersistentRole, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, remove_state_artifacts, runtime_status_path, save_state},
     session::{self, SessionOptions},
     shell::{ShellOpen, ShellPacket, bridge_local_shell_stream, run_remote_shell, send_channel_packet, write_stream_packet},
     status_line::StatusLine,
@@ -77,6 +77,30 @@ struct PortForwardOpen {
 struct PipeBroker {
     pending_sender: Mutex<Option<async_std::os::unix::net::UnixStream>>,
     pending_channel: Mutex<Option<crate::mux::MuxChannel>>,
+}
+
+#[derive(Default)]
+struct PortForwardBroker {
+    listeners: Mutex<std::collections::HashMap<u32, Sender<()>>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PortControlRequest {
+    action: PortControlAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum PortControlAction {
+    Add { forward: ManagedPortForward },
+    Remove { id: u32 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum PortControlResponse {
+    Ok {},
+    Error { message: String },
 }
 
 fn parse_listen_endpoint(input: &str) -> Result<TcpListen> {
@@ -219,7 +243,10 @@ where
 
 async fn handle_incoming_channel(
     incoming: IncomingChannel,
+    session: &MuxSession,
     pipe_broker: Arc<PipeBroker>,
+    port_broker: Arc<PortForwardBroker>,
+    state_path: &Path,
     runtime_status: &PersistentRuntimeStatus,
     style: &crate::cli::AnsiStyle,
 ) -> Result<()> {
@@ -251,6 +278,19 @@ async fn handle_incoming_channel(
             })?;
             eprintln!("{} {detail}", style.status("Forwarding:"));
             bridge_stream_and_channel(stream, incoming.channel).await
+        },
+        ChannelKind::PortControl => {
+            let request: PortControlRequest = serde_json::from_slice(&incoming.open_payload)?;
+            handle_remote_port_control(
+                incoming.channel,
+                request,
+                session,
+                state_path,
+                &port_broker,
+                runtime_status,
+                style,
+            )
+            .await
         },
         ChannelKind::Pipe => {
             let (maybe_sender, maybe_channel) = take_pending_pipe_pair(&pipe_broker);
@@ -318,15 +358,29 @@ async fn handle_incoming_channel(
 async fn drive_incoming_channels(
     session: MuxSession,
     pipe_broker: Arc<PipeBroker>,
+    port_broker: Arc<PortForwardBroker>,
+    state_path: PathBuf,
     runtime_status: PersistentRuntimeStatus,
     style: crate::cli::AnsiStyle,
 ) {
     while let Ok(incoming) = session.next_incoming().await {
         let pipe_broker = pipe_broker.clone();
+        let port_broker = port_broker.clone();
+        let state_path = state_path.clone();
+        let session = session.clone();
         let runtime_status = runtime_status.clone();
         let style = style.clone();
         task::spawn(async move {
-            let _ = handle_incoming_channel(incoming, pipe_broker, &runtime_status, &style).await;
+            let _ = handle_incoming_channel(
+                incoming,
+                &session,
+                pipe_broker,
+                port_broker,
+                &state_path,
+                &runtime_status,
+                &style,
+            )
+            .await;
         });
     }
 }
@@ -493,11 +547,247 @@ fn clear_pending_pipe_state(broker: &Arc<PipeBroker>) {
         .take();
 }
 
+fn managed_listen_host(forward: &ManagedPortForward) -> &str {
+    forward.local_listen_host.as_deref().unwrap_or("127.0.0.1")
+}
+
+fn managed_remote_connect_host(forward: &ManagedPortForward) -> &str {
+    forward.remote_connect_host.as_deref().unwrap_or("127.0.0.1")
+}
+
+fn validate_managed_port_forward(forward: &ManagedPortForward) -> Result<()> {
+    let local_listen = forward.local_listen_port.is_some();
+    let local_connect = forward.local_connect_port.is_some();
+    let remote_listen = forward.remote_listen_port.is_some();
+    let remote_connect = forward.remote_connect_port.is_some();
+
+    match (local_listen, local_connect, remote_listen, remote_connect) {
+        (true, false, false, true) | (false, true, true, false) => {},
+        _ => {
+            return Err(Error::Session(format!(
+                "forward {} is not a supported local/remote port mapping",
+                forward.id
+            )))
+        },
+    }
+
+    if let Some(port) = forward.local_listen_port {
+        let listener = std::net::TcpListener::bind((managed_listen_host(forward), port))
+            .map_err(|error| {
+                Error::Session(format!(
+                    "could not listen on {}:{}: {error}",
+                    managed_listen_host(forward),
+                    port
+                ))
+            })?;
+        drop(listener);
+    }
+
+    Ok(())
+}
+
+fn listener_plan_from_managed_forward(forward: &ManagedPortForward) -> Option<ListenerPlan> {
+    Some(ListenerPlan {
+        name: format!("port-{}", forward.id),
+        listen_host: managed_listen_host(forward).to_string(),
+        listen_port: forward.local_listen_port?,
+        connect_host: managed_remote_connect_host(forward).to_string(),
+        connect_port: forward.remote_connect_port?,
+    })
+}
+
+async fn activate_managed_port_forward(
+    forward: &ManagedPortForward,
+    session: &MuxSession,
+    port_broker: &Arc<PortForwardBroker>,
+    runtime_status: &PersistentRuntimeStatus,
+    style: &crate::cli::AnsiStyle,
+) -> Result<()> {
+    deactivate_managed_port_forward(forward.id, port_broker).await;
+    let Some(listener) = listener_plan_from_managed_forward(forward) else {
+        return Ok(());
+    };
+    let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+    port_broker
+        .listeners
+        .lock()
+        .expect("port forward broker mutex poisoned")
+        .insert(forward.id, cancel_tx);
+    task::spawn(drive_listener(
+        listener,
+        session.clone(),
+        runtime_status.clone(),
+        style.clone(),
+        cancel_rx,
+    ));
+    Ok(())
+}
+
+async fn deactivate_managed_port_forward(id: u32, port_broker: &Arc<PortForwardBroker>) {
+    let sender = port_broker
+        .listeners
+        .lock()
+        .expect("port forward broker mutex poisoned")
+        .remove(&id);
+    if let Some(sender) = sender {
+        let _ = sender.send(()).await;
+    }
+}
+
+async fn clear_managed_port_forward_state(port_broker: &Arc<PortForwardBroker>) {
+    let senders = port_broker
+        .listeners
+        .lock()
+        .expect("port forward broker mutex poisoned")
+        .drain()
+        .map(|(_, sender)| sender)
+        .collect::<Vec<_>>();
+    for sender in senders {
+        let _ = sender.send(()).await;
+    }
+}
+
+async fn restore_managed_port_forwards(
+    state_path: &Path,
+    session: &MuxSession,
+    port_broker: &Arc<PortForwardBroker>,
+    runtime_status: &PersistentRuntimeStatus,
+    style: &crate::cli::AnsiStyle,
+) -> Result<()> {
+    clear_managed_port_forward_state(port_broker).await;
+    let state = load_state(state_path)?;
+    for forward in &state.config.ports {
+        activate_managed_port_forward(forward, session, port_broker, runtime_status, style).await?;
+    }
+    Ok(())
+}
+
+async fn send_port_control_request(
+    session: &MuxSession,
+    request: &PortControlRequest,
+) -> Result<()> {
+    let channel = session
+        .open_channel(ChannelKind::PortControl, serde_json::to_vec(request)?)
+        .await?;
+    let mut response_bytes = Vec::new();
+    while let Some(chunk) = channel.recv().await? {
+        response_bytes.extend(chunk);
+    }
+    if response_bytes.is_empty() {
+        return Err(Error::Session(
+            "the remote side closed the port-management request without replying".into(),
+        ));
+    }
+    match serde_json::from_slice::<PortControlResponse>(&response_bytes)? {
+        PortControlResponse::Ok {} => Ok(()),
+        PortControlResponse::Error { message } => Err(Error::Session(message)),
+    }
+}
+
+async fn add_managed_port_forward(
+    state_path: &Path,
+    session: &MuxSession,
+    definition: ManagedPortDefinition,
+    port_broker: &Arc<PortForwardBroker>,
+    runtime_status: &PersistentRuntimeStatus,
+    style: &crate::cli::AnsiStyle,
+) -> Result<ManagedPortForward> {
+    definition.validate()?;
+    let mut state = load_state(state_path)?;
+    let forward = definition.into_forward(ManagedPortForward::next_id(&state.config.ports));
+    validate_managed_port_forward(&forward)?;
+    send_port_control_request(
+        session,
+        &PortControlRequest {
+            action: PortControlAction::Add {
+                forward: forward.mirrored(),
+            },
+        },
+    )
+    .await?;
+    state.config.ports.push(forward.clone());
+    save_state(state_path, &state)?;
+    activate_managed_port_forward(&forward, session, port_broker, runtime_status, style).await?;
+    Ok(forward)
+}
+
+async fn remove_managed_port_forward(
+    state_path: &Path,
+    session: &MuxSession,
+    id: u32,
+    port_broker: &Arc<PortForwardBroker>,
+) -> Result<()> {
+    let mut state = load_state(state_path)?;
+    if !state.config.ports.iter().any(|forward| forward.id == id) {
+        return Err(Error::Session(format!("port forward {id} was not found")));
+    }
+    send_port_control_request(
+        session,
+        &PortControlRequest {
+            action: PortControlAction::Remove { id },
+        },
+    )
+    .await?;
+    state.config.ports.retain(|forward| forward.id != id);
+    save_state(state_path, &state)?;
+    deactivate_managed_port_forward(id, port_broker).await;
+    Ok(())
+}
+
+async fn handle_remote_port_control(
+    channel: crate::mux::MuxChannel,
+    request: PortControlRequest,
+    session: &MuxSession,
+    state_path: &Path,
+    port_broker: &Arc<PortForwardBroker>,
+    runtime_status: &PersistentRuntimeStatus,
+    style: &crate::cli::AnsiStyle,
+) -> Result<()> {
+    let result = match request.action {
+        PortControlAction::Add { forward } => {
+            validate_managed_port_forward(&forward)?;
+            let mut state = load_state(state_path)?;
+            if state.config.ports.iter().any(|existing| existing.id == forward.id) {
+                Err(Error::Session(format!(
+                    "port forward {} already exists on the remote side",
+                    forward.id
+                )))
+            } else {
+                state.config.ports.push(forward.clone());
+                save_state(state_path, &state)?;
+                activate_managed_port_forward(&forward, session, port_broker, runtime_status, style)
+                    .await?;
+                Ok(())
+            }
+        },
+        PortControlAction::Remove { id } => {
+            let mut state = load_state(state_path)?;
+            state.config.ports.retain(|forward| forward.id != id);
+            save_state(state_path, &state)?;
+            deactivate_managed_port_forward(id, port_broker).await;
+            Ok(())
+        },
+    };
+
+    let response = match result {
+        Ok(()) => PortControlResponse::Ok {},
+        Err(error) => PortControlResponse::Error {
+            message: protocol_error_message(&error),
+        },
+    };
+    channel.send(serde_json::to_vec(&response)?).await?;
+    channel.close().await?;
+    Ok(())
+}
+
 async fn handle_runtime_control_request(
     request: RuntimeControlRequest,
     session: Option<MuxSession>,
     pipe_broker: Arc<PipeBroker>,
+    port_broker: Arc<PortForwardBroker>,
     state_path: &Path,
+    runtime_status: &PersistentRuntimeStatus,
+    style: &crate::cli::AnsiStyle,
 ) -> Result<()> {
     match request {
         RuntimeControlRequest::Probe { reply } => {
@@ -538,6 +828,44 @@ async fn handle_runtime_control_request(
                 .send(Ok(ControlResponse::Echo {
                     payload: String::from_utf8_lossy(&echoed).into_owned(),
                 }))
+                .await;
+        },
+        RuntimeControlRequest::PortsAdd { definition, reply } => {
+            let Some(session) = session else {
+                let _ = reply
+                    .send(Err(Error::Session("the tunnel is not connected yet".into())))
+                    .await;
+                return Ok(());
+            };
+            let forward = add_managed_port_forward(
+                state_path,
+                &session,
+                definition,
+                &port_broker,
+                runtime_status,
+                style,
+            )
+            .await?;
+            let _ = reply
+                .send(Ok(ControlResponse::PortsAdded { forward }))
+                .await;
+        },
+        RuntimeControlRequest::PortsRemove { id, reply } => {
+            let Some(session) = session else {
+                let _ = reply
+                    .send(Err(Error::Session("the tunnel is not connected yet".into())))
+                    .await;
+                return Ok(());
+            };
+            remove_managed_port_forward(
+                state_path,
+                &session,
+                id,
+                &port_broker,
+            )
+            .await?;
+            let _ = reply
+                .send(Ok(ControlResponse::PortsRemoved { id }))
                 .await;
         },
         RuntimeControlRequest::Pipe { mode, stream } => {
@@ -645,15 +973,26 @@ async fn drive_runtime_control_requests(
     requests: Receiver<RuntimeControlRequest>,
     live_session: Arc<Mutex<Option<MuxSession>>>,
     pipe_broker: Arc<PipeBroker>,
+    port_broker: Arc<PortForwardBroker>,
     state_path: PathBuf,
+    runtime_status: PersistentRuntimeStatus,
+    style: crate::cli::AnsiStyle,
 ) {
     while let Ok(request) = requests.recv().await {
         let session = live_session
             .lock()
             .expect("live session mutex poisoned")
             .clone();
-        let _ =
-            handle_runtime_control_request(request, session, pipe_broker.clone(), &state_path).await;
+        let _ = handle_runtime_control_request(
+            request,
+            session,
+            pipe_broker.clone(),
+            port_broker.clone(),
+            &state_path,
+            &runtime_status,
+            &style,
+        )
+        .await;
     }
 }
 
@@ -862,16 +1201,21 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
     } else {
         None
     };
+    let style = stderr_style();
     let runtime_status = PersistentRuntimeStatus::new(&_state_path)?;
     let (control_tx, control_rx) = async_channel::unbounded::<RuntimeControlRequest>();
     let live_session = Arc::new(Mutex::new(None::<MuxSession>));
     let pipe_broker = Arc::new(PipeBroker::default());
+    let port_broker = Arc::new(PortForwardBroker::default());
     let _control = ControlServer::spawn(&_state_path, control_tx)?;
     task::spawn(drive_runtime_control_requests(
         control_rx,
         live_session.clone(),
         pipe_broker.clone(),
+        port_broker.clone(),
         _state_path.clone(),
+        runtime_status.clone(),
+        style.clone(),
     ));
     let mut state = state;
     if !state.config.temporary && state.peer_public_key_hex.is_none() {
@@ -880,7 +1224,6 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
         ));
     }
 
-    let style = stderr_style();
     let intent = forward::CliIntent {
         locals: state.config.locals.clone(),
         remotes: state.config.remotes.clone(),
@@ -894,6 +1237,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             &runtime_status,
             live_session,
             pipe_broker,
+            port_broker,
         )
         .await;
     }
@@ -958,9 +1302,19 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
                 phase: TunnelRuntimePhase::Up,
                 detail: Some("peer connected; live tunnel ready".into()),
             })?;
+            restore_managed_port_forwards(
+                &_state_path,
+                &mux_session,
+                &port_broker,
+                &runtime_status,
+                &style,
+            )
+            .await?;
             let incoming_task = task::spawn(drive_incoming_channels(
                 mux_session.clone(),
                 pipe_broker.clone(),
+                port_broker.clone(),
+                _state_path.clone(),
                 runtime_status.clone(),
                 style.clone(),
             ));
@@ -985,6 +1339,7 @@ pub async fn run_persistent(_state_path: PathBuf) -> Result<()> {
             let _ = incoming_task.cancel().await;
             *live_session.lock().expect("live session mutex poisoned") = None;
             clear_pending_pipe_state(&pipe_broker);
+            clear_managed_port_forward_state(&port_broker).await;
             transport_result
         }
         .await;
@@ -1023,6 +1378,7 @@ async fn run_temporary_tunnel(
     runtime_status: &PersistentRuntimeStatus,
     live_session: Arc<Mutex<Option<MuxSession>>>,
     pipe_broker: Arc<PipeBroker>,
+    port_broker: Arc<PortForwardBroker>,
 ) -> Result<()> {
     let interrupt = install_interrupt_notifier()?;
     let role = state.config.role;
@@ -1080,9 +1436,19 @@ async fn run_temporary_tunnel(
         phase: TunnelRuntimePhase::Up,
         detail: Some("peer connected; live tunnel ready".into()),
     })?;
+    restore_managed_port_forwards(
+        state_path,
+        &mux_session,
+        &port_broker,
+        runtime_status,
+        style,
+    )
+    .await?;
     let incoming_task = task::spawn(drive_incoming_channels(
         mux_session.clone(),
         pipe_broker.clone(),
+        port_broker.clone(),
+        state_path.to_path_buf(),
         runtime_status.clone(),
         style.clone(),
     ));
@@ -1114,6 +1480,7 @@ async fn run_temporary_tunnel(
     let _ = incoming_task.cancel().await;
     *live_session.lock().expect("live session mutex poisoned") = None;
     clear_pending_pipe_state(&pipe_broker);
+    clear_managed_port_forward_state(&port_broker).await;
     result
 }
 

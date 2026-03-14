@@ -47,6 +47,9 @@ async fn main() {
         },
         TunnelwormInvocation::SelfUpdate => tunnelworm::self_update::run_self_update(),
         TunnelwormInvocation::Pipe(config) => persistent::run_named_pipe(&config).await,
+        TunnelwormInvocation::PortsList(config) => persistent::list_tunnel_ports(&config),
+        TunnelwormInvocation::PortsAdd(config) => persistent::add_tunnel_port(&config).await,
+        TunnelwormInvocation::PortsRemove(config) => persistent::remove_tunnel_port(&config).await,
         TunnelwormInvocation::SendFile(config) => persistent::run_named_send_file(&config).await,
         TunnelwormInvocation::Shell(config) => match persistent::run_named_shell(&config).await {
             Ok(code) => {

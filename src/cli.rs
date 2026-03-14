@@ -191,6 +191,21 @@ Examples:
 Notes:
   Without --command, tunnelworm starts the remote user's login shell.";
 
+const PORTS_AFTER_HELP: &str = "\
+Examples:
+  List the current port forwards on one live tunnel:
+    tunnelworm ports office
+
+  Add one forward that listens locally and connects on the remote side:
+    tunnelworm ports add office --local-listen 9097 --remote-connect 22
+
+  Remove one forward by its numeric ID:
+    tunnelworm ports remove office 1
+
+Notes:
+  Use `local` / `remote` terminology in this command family.
+  A bare port like `9097` defaults to loopback on that side.";
+
 const OPEN_AFTER_HELP: &str = "\
 Examples:
   Open a bare one-off tunnel and print a bootstrap code:
@@ -409,6 +424,7 @@ pub fn tunnelworm_command() -> Command {
                 })
         })
         .mut_subcommand("pipe", |sub| sub.after_long_help(styled_pipe_after_help()))
+        .mut_subcommand("ports", |sub| sub.after_long_help(StyledStr::from(PORTS_AFTER_HELP)))
         .mut_subcommand("send-file", |sub| {
             sub.after_long_help(styled_send_file_after_help())
         })
@@ -443,6 +459,7 @@ pub fn tunnelworm_completion_command() -> Command {
                 })
         })
         .mut_subcommand("pipe", |sub| sub.after_long_help(styled_pipe_after_help()))
+        .mut_subcommand("ports", |sub| sub.after_long_help(StyledStr::from(PORTS_AFTER_HELP)))
         .mut_subcommand("send-file", |sub| {
             sub.after_long_help(styled_send_file_after_help())
         })
@@ -499,6 +516,29 @@ pub struct TunnelShellConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct TunnelPortsListConfig {
+    pub name: Option<String>,
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TunnelPortsAddConfig {
+    pub name: Option<String>,
+    pub state: Option<PathBuf>,
+    pub local_listen: Option<String>,
+    pub local_connect: Option<String>,
+    pub remote_listen: Option<String>,
+    pub remote_connect: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TunnelPortsRemoveConfig {
+    pub name: Option<String>,
+    pub state: Option<PathBuf>,
+    pub id: u32,
+}
+
+#[derive(Debug, Clone)]
 pub struct TunnelSendFileConfig {
     pub name: String,
     pub source: PathBuf,
@@ -513,6 +553,9 @@ pub enum TunnelwormInvocation {
     Completion(Shell),
     SelfUpdate,
     Pipe(TunnelPipeConfig),
+    PortsList(TunnelPortsListConfig),
+    PortsAdd(TunnelPortsAddConfig),
+    PortsRemove(TunnelPortsRemoveConfig),
     SendFile(TunnelSendFileConfig),
     Shell(TunnelShellConfig),
     TunnelCreate(TunnelConfig),
@@ -727,6 +770,60 @@ pub struct TunnelPipeArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct TunnelPortsListArgs {
+    #[arg(value_name = "NAME", required_unless_present = "state", help = "Local name of the saved tunnel endpoint to use")]
+    pub name: Option<String>,
+    #[arg(long = "state", value_name = "PATH", required_unless_present = "name", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TunnelPortsAddArgs {
+    #[arg(value_name = "NAME", help = "Local name of the saved tunnel endpoint to use")]
+    pub name: String,
+    #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+    #[arg(long = "local-listen", value_name = "ADDR", help = "Listen locally on port or host:port")]
+    pub local_listen: Option<String>,
+    #[arg(long = "local-connect", value_name = "ADDR", help = "Connect locally to port or host:port")]
+    pub local_connect: Option<String>,
+    #[arg(long = "remote-listen", value_name = "ADDR", help = "Ask the remote side to listen on port or host:port")]
+    pub remote_listen: Option<String>,
+    #[arg(long = "remote-connect", value_name = "ADDR", help = "Ask the remote side to connect to port or host:port")]
+    pub remote_connect: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TunnelPortsRemoveArgs {
+    #[arg(value_name = "NAME", help = "Local name of the saved tunnel endpoint to use")]
+    pub name: String,
+    #[arg(value_name = "ID", help = "Numeric port-forward ID to remove")]
+    pub id: u32,
+    #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum TunnelPortsSubcommand {
+    #[command(about = "Add one live port forward to one tunnel")]
+    Add(TunnelPortsAddArgs),
+    #[command(about = "Remove one live port forward from one tunnel")]
+    Remove(TunnelPortsRemoveArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "List or manage live port forwards on one tunnel")]
+#[command(after_long_help = PORTS_AFTER_HELP)]
+pub struct TunnelPortsArgs {
+    #[command(subcommand)]
+    pub command: Option<TunnelPortsSubcommand>,
+    #[arg(value_name = "NAME", help = "Local name of the saved tunnel endpoint to use")]
+    pub name: Option<String>,
+    #[arg(long = "state", value_name = "PATH", help = "Use an explicit persistent state file path")]
+    pub state: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
 #[command(about = "Send one file over one live named tunnel")]
 #[command(after_long_help = SEND_FILE_AFTER_HELP)]
 pub struct TunnelSendFileArgs {
@@ -788,6 +885,7 @@ pub enum TunnelwormSubcommand {
     Open(TunnelOpenArgs),
     SelfUpdate(SelfUpdateArgs),
     Pipe(TunnelPipeArgs),
+    Ports(TunnelPortsArgs),
     #[command(alias = "send")]
     SendFile(TunnelSendFileArgs),
     Shell(TunnelShellArgs),
@@ -835,6 +933,34 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                     None
                 },
             })),
+            Some(TunnelwormSubcommand::Ports(args)) => match args.command {
+                None => {
+                    if args.name.is_none() && args.state.is_none() {
+                        return Err(Error::Usage(
+                            "ports needs either a tunnel name or --state".into(),
+                        ));
+                    }
+                    Ok(Self::PortsList(TunnelPortsListConfig {
+                        name: args.name,
+                        state: args.state,
+                    }))
+                },
+                Some(TunnelPortsSubcommand::Add(add)) => Ok(Self::PortsAdd(TunnelPortsAddConfig {
+                    name: Some(add.name),
+                    state: add.state,
+                    local_listen: add.local_listen,
+                    local_connect: add.local_connect,
+                    remote_listen: add.remote_listen,
+                    remote_connect: add.remote_connect,
+                })),
+                Some(TunnelPortsSubcommand::Remove(remove)) => {
+                    Ok(Self::PortsRemove(TunnelPortsRemoveConfig {
+                        name: Some(remove.name),
+                        state: remove.state,
+                        id: remove.id,
+                    }))
+                },
+            },
             Some(TunnelwormSubcommand::SendFile(args)) => Ok(Self::SendFile(TunnelSendFileConfig {
                 name: args.name,
                 source: args.source,

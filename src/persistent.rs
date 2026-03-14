@@ -12,8 +12,8 @@ use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::{stdout_style, TunnelConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
-    control::{ControlResponse, control_socket_path, echo_runtime, probe_runtime},
+    cli::{stdout_style, TunnelConfig, TunnelDeleteConfig, TunnelPipeConfig, TunnelPortsAddConfig, TunnelPortsListConfig, TunnelPortsRemoveConfig, TunnelSendFileConfig, TunnelShellConfig, TunnelStatusConfig, TunnelUpConfig},
+    control::{ControlResponse, add_port_forward_runtime, control_socket_path, echo_runtime, probe_runtime, remove_port_forward_runtime},
     error::{Error, Result},
     file_transfer,
     pipe,
@@ -49,6 +49,33 @@ pub struct PersistentConfig {
     pub role: PersistentRole,
     pub locals: Vec<LocalSpec>,
     pub remotes: Vec<RemoteSpec>,
+    #[serde(default)]
+    pub ports: Vec<ManagedPortForward>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedPortForward {
+    pub id: u32,
+    pub local_listen_host: Option<String>,
+    pub local_listen_port: Option<u16>,
+    pub local_connect_host: Option<String>,
+    pub local_connect_port: Option<u16>,
+    pub remote_listen_host: Option<String>,
+    pub remote_listen_port: Option<u16>,
+    pub remote_connect_host: Option<String>,
+    pub remote_connect_port: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedPortDefinition {
+    pub local_listen_host: Option<String>,
+    pub local_listen_port: Option<u16>,
+    pub local_connect_host: Option<String>,
+    pub local_connect_port: Option<u16>,
+    pub remote_listen_host: Option<String>,
+    pub remote_listen_port: Option<u16>,
+    pub remote_connect_host: Option<String>,
+    pub remote_connect_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +99,113 @@ pub enum TunnelRuntimePhase {
 pub struct TunnelRuntimeStatus {
     pub phase: TunnelRuntimePhase,
     pub detail: Option<String>,
+}
+
+impl ManagedPortDefinition {
+    pub fn validate(&self) -> Result<()> {
+        let local_listen = self.local_listen_port.is_some();
+        let local_connect = self.local_connect_port.is_some();
+        let remote_listen = self.remote_listen_port.is_some();
+        let remote_connect = self.remote_connect_port.is_some();
+
+        if local_listen == local_connect {
+            return Err(Error::Usage(
+                "ports add needs exactly one local half: --local-listen or --local-connect".into(),
+            ));
+        }
+        if remote_listen == remote_connect {
+            return Err(Error::Usage(
+                "ports add needs exactly one remote half: --remote-listen or --remote-connect".into(),
+            ));
+        }
+
+        match (local_listen, remote_connect, remote_listen, local_connect) {
+            (true, true, false, false) | (false, false, true, true) => Ok(()),
+            _ => Err(Error::Usage(
+                "ports add only supports `--local-listen` with `--remote-connect` or `--remote-listen` with `--local-connect`".into(),
+            )),
+        }
+    }
+
+    pub fn into_forward(self, id: u32) -> ManagedPortForward {
+        ManagedPortForward {
+            id,
+            local_listen_host: self.local_listen_host,
+            local_listen_port: self.local_listen_port,
+            local_connect_host: self.local_connect_host,
+            local_connect_port: self.local_connect_port,
+            remote_listen_host: self.remote_listen_host,
+            remote_listen_port: self.remote_listen_port,
+            remote_connect_host: self.remote_connect_host,
+            remote_connect_port: self.remote_connect_port,
+        }
+    }
+
+    pub fn mirrored(&self) -> Self {
+        Self {
+            local_listen_host: self.remote_listen_host.clone(),
+            local_listen_port: self.remote_listen_port,
+            local_connect_host: self.remote_connect_host.clone(),
+            local_connect_port: self.remote_connect_port,
+            remote_listen_host: self.local_listen_host.clone(),
+            remote_listen_port: self.local_listen_port,
+            remote_connect_host: self.local_connect_host.clone(),
+            remote_connect_port: self.local_connect_port,
+        }
+    }
+}
+
+impl ManagedPortForward {
+    pub fn mirrored(&self) -> Self {
+        Self {
+            id: self.id,
+            local_listen_host: self.remote_listen_host.clone(),
+            local_listen_port: self.remote_listen_port,
+            local_connect_host: self.remote_connect_host.clone(),
+            local_connect_port: self.remote_connect_port,
+            remote_listen_host: self.local_listen_host.clone(),
+            remote_listen_port: self.local_listen_port,
+            remote_connect_host: self.local_connect_host.clone(),
+            remote_connect_port: self.local_connect_port,
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        if let (Some(listen_host), Some(listen_port), Some(connect_host), Some(connect_port)) = (
+            self.local_listen_host.as_deref(),
+            self.local_listen_port,
+            self.remote_connect_host.as_deref(),
+            self.remote_connect_port,
+        ) {
+            return format!(
+                "local listen {}:{} <-> remote connect {}:{}",
+                listen_host, listen_port, connect_host, connect_port
+            );
+        }
+
+        if let (Some(connect_host), Some(connect_port), Some(listen_host), Some(listen_port)) = (
+            self.local_connect_host.as_deref(),
+            self.local_connect_port,
+            self.remote_listen_host.as_deref(),
+            self.remote_listen_port,
+        ) {
+            return format!(
+                "local connect {}:{} <-> remote listen {}:{}",
+                connect_host, connect_port, listen_host, listen_port
+            );
+        }
+
+        "invalid managed port forward".into()
+    }
+
+    pub fn next_id(forwards: &[ManagedPortForward]) -> u32 {
+        forwards
+            .iter()
+            .map(|forward| forward.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+    }
 }
 
 impl PersistentState {
@@ -145,6 +279,7 @@ impl PersistentConfig {
             role: PersistentRole::Join,
             locals: config.locals.clone(),
             remotes: config.remotes.clone(),
+            ports: Vec::new(),
         }
     }
 
@@ -157,6 +292,7 @@ impl PersistentConfig {
             role: PersistentRole::Allocate,
             locals: config.locals.clone(),
             remotes: config.remotes.clone(),
+            ports: Vec::new(),
         }
     }
 }
@@ -170,6 +306,7 @@ fn temporary_config(config: &TunnelConfig, code: String, role: PersistentRole) -
         role,
         locals: config.locals.clone(),
         remotes: config.remotes.clone(),
+        ports: Vec::new(),
     }
 }
 
@@ -527,6 +664,140 @@ pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
         style.label("Tunnel:"),
         state.config.name
     );
+    Ok(())
+}
+
+fn parse_port_endpoint(input: &str, flag: &str) -> Result<(String, u16)> {
+    if let Ok(port) = input.parse::<u16>() {
+        if port == 0 {
+            return Err(Error::Usage(format!("{flag} must be between 1 and 65535")));
+        }
+        return Ok(("127.0.0.1".into(), port));
+    }
+
+    let (host, port) = input.split_once(':').ok_or_else(|| {
+        Error::Usage(format!(
+            "{flag} must be a port or host:port, got {input:?}"
+        ))
+    })?;
+    let port = port.parse::<u16>().map_err(|_| {
+        Error::Usage(format!("{flag} must end with a valid port, got {input:?}"))
+    })?;
+    if port == 0 {
+        return Err(Error::Usage(format!("{flag} must be between 1 and 65535")));
+    }
+    let host = match host {
+        "localhost" => "127.0.0.1".into(),
+        other => other.to_string(),
+    };
+    Ok((host, port))
+}
+
+fn build_managed_port_definition(config: &TunnelPortsAddConfig) -> Result<ManagedPortDefinition> {
+    let (local_listen_host, local_listen_port) = match config.local_listen.as_deref() {
+        Some(value) => {
+            let (host, port) = parse_port_endpoint(value, "--local-listen")?;
+            (Some(host), Some(port))
+        },
+        None => (None, None),
+    };
+    let (local_connect_host, local_connect_port) = match config.local_connect.as_deref() {
+        Some(value) => {
+            let (host, port) = parse_port_endpoint(value, "--local-connect")?;
+            (Some(host), Some(port))
+        },
+        None => (None, None),
+    };
+    let (remote_listen_host, remote_listen_port) = match config.remote_listen.as_deref() {
+        Some(value) => {
+            let (host, port) = parse_port_endpoint(value, "--remote-listen")?;
+            (Some(host), Some(port))
+        },
+        None => (None, None),
+    };
+    let (remote_connect_host, remote_connect_port) = match config.remote_connect.as_deref() {
+        Some(value) => {
+            let (host, port) = parse_port_endpoint(value, "--remote-connect")?;
+            (Some(host), Some(port))
+        },
+        None => (None, None),
+    };
+    let definition = ManagedPortDefinition {
+        local_listen_host,
+        local_listen_port,
+        local_connect_host,
+        local_connect_port,
+        remote_listen_host,
+        remote_listen_port,
+        remote_connect_host,
+        remote_connect_port,
+    };
+    definition.validate()?;
+    Ok(definition)
+}
+
+pub fn list_tunnel_ports(config: &TunnelPortsListConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let style = stdout_style();
+    let (state_path, state, correction) =
+        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    if let Some(correction) = correction {
+        eprintln!("{} {correction}", style.label("Resolved:"));
+    }
+    let runtime = current_tunnel_runtime(&state_path)?;
+    println!("{}", style.heading("Ports"));
+    println!("  {} {}", style.label("tunnel:"), state.config.name);
+    println!("  {} {}", style.label("runtime:"), runtime.label());
+    if state.config.ports.is_empty() {
+        println!("  none");
+        return Ok(());
+    }
+    let state_label = if persistent_worker_running(&state_path)? {
+        "active"
+    } else {
+        "pending"
+    };
+    for forward in &state.config.ports {
+        println!("  - {}: {} ({state_label})", forward.id, forward.summary());
+    }
+    Ok(())
+}
+
+pub async fn add_tunnel_port(config: &TunnelPortsAddConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let style = stdout_style();
+    let (state_path, _state, correction) =
+        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    if let Some(correction) = correction {
+        eprintln!("{} {correction}", style.label("Resolved:"));
+    }
+    wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
+    let definition = build_managed_port_definition(config)?;
+    let forward = add_port_forward_runtime(&state_path, &definition)
+        .await?
+        .ok_or_else(|| {
+            Error::Session("the local tunnel runtime stopped before the port was added".into())
+        })?;
+    println!("{} {}", style.heading("Added:"), forward.id);
+    println!("  {} {}", style.label("mapping:"), forward.summary());
+    Ok(())
+}
+
+pub async fn remove_tunnel_port(config: &TunnelPortsRemoveConfig) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let style = stdout_style();
+    let (state_path, _state, correction) =
+        resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    if let Some(correction) = correction {
+        eprintln!("{} {correction}", style.label("Resolved:"));
+    }
+    wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
+    remove_port_forward_runtime(&state_path, config.id)
+        .await?
+        .ok_or_else(|| {
+            Error::Session("the local tunnel runtime stopped before the port was removed".into())
+        })?;
+    println!("{} {}", style.heading("Removed:"), config.id);
     Ok(())
 }
 

@@ -14,7 +14,7 @@ use crate::{
     error::{Error, Result},
     file_transfer::FileTransferOpen,
     pipe::PipeMode,
-    persistent::{TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
+    persistent::{ManagedPortDefinition, ManagedPortForward, TunnelRuntimePhase, TunnelRuntimeStatus, load_state, runtime_status_path},
     shell::ShellOpen,
 };
 
@@ -26,6 +26,8 @@ pub enum ControlRequest {
     Pipe { mode: PipeMode },
     Shell { open: ShellOpen },
     SendFile { open: FileTransferOpen },
+    PortsAdd { definition: ManagedPortDefinition },
+    PortsRemove { id: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +41,12 @@ pub enum ControlResponse {
     Echo {
         payload: String,
     },
+    PortsAdded {
+        forward: ManagedPortForward,
+    },
+    PortsRemoved {
+        id: u32,
+    },
     Error {
         message: String,
     },
@@ -51,6 +59,14 @@ pub enum RuntimeControlRequest {
     },
     Echo {
         payload: String,
+        reply: Sender<Result<ControlResponse>>,
+    },
+    PortsAdd {
+        definition: ManagedPortDefinition,
+        reply: Sender<Result<ControlResponse>>,
+    },
+    PortsRemove {
+        id: u32,
         reply: Sender<Result<ControlResponse>>,
     },
     Pipe {
@@ -170,9 +186,86 @@ pub async fn echo_runtime(state_path: &Path, payload: &str) -> Result<Option<Str
     match serde_json::from_str::<ControlResponse>(&line)? {
         ControlResponse::Echo { payload } => Ok(Some(payload)),
         ControlResponse::Error { message } => Err(Error::Session(message)),
-        ControlResponse::Probe { .. } => Err(Error::Session(
+        ControlResponse::Probe { .. } | ControlResponse::PortsAdded { .. } | ControlResponse::PortsRemoved { .. } => Err(Error::Session(
             "received an unexpected probe response while checking tunnel readiness".into(),
         )),
+    }
+}
+
+pub async fn add_port_forward_runtime(
+    state_path: &Path,
+    definition: &ManagedPortDefinition,
+) -> Result<Option<ManagedPortForward>> {
+    let socket_path = control_socket_path(state_path);
+    if !socket_path.exists() {
+        return Ok(None);
+    }
+
+    let mut stream = match async_std::os::unix::net::UnixStream::connect(&socket_path).await {
+        Ok(stream) => stream,
+        Err(error) if is_stale_control_socket(&error) => return Ok(None),
+        Err(error) => {
+            return Err(Error::PersistentState(format!(
+                "could not connect to the local tunnel control socket at {}: {error}",
+                socket_path.display()
+            )))
+        },
+    };
+    let mut request = serde_json::to_vec(&ControlRequest::PortsAdd {
+        definition: definition.clone(),
+    })?;
+    request.push(b'\n');
+    stream.write_all(&request).await?;
+    stream.flush().await?;
+
+    let line = read_request_line(&mut stream).await?;
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+
+    match serde_json::from_str::<ControlResponse>(&line)? {
+        ControlResponse::PortsAdded { forward } => Ok(Some(forward)),
+        ControlResponse::Error { message } => Err(Error::Session(message)),
+        other => Err(Error::Session(format!(
+            "received an unexpected control response while adding a port forward: {:?}",
+            other
+        ))),
+    }
+}
+
+pub async fn remove_port_forward_runtime(state_path: &Path, id: u32) -> Result<Option<()>> {
+    let socket_path = control_socket_path(state_path);
+    if !socket_path.exists() {
+        return Ok(None);
+    }
+
+    let mut stream = match async_std::os::unix::net::UnixStream::connect(&socket_path).await {
+        Ok(stream) => stream,
+        Err(error) if is_stale_control_socket(&error) => return Ok(None),
+        Err(error) => {
+            return Err(Error::PersistentState(format!(
+                "could not connect to the local tunnel control socket at {}: {error}",
+                socket_path.display()
+            )))
+        },
+    };
+    let mut request = serde_json::to_vec(&ControlRequest::PortsRemove { id })?;
+    request.push(b'\n');
+    stream.write_all(&request).await?;
+    stream.flush().await?;
+
+    let line = read_request_line(&mut stream).await?;
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+
+    match serde_json::from_str::<ControlResponse>(&line)? {
+        ControlResponse::PortsRemoved { .. } => Ok(Some(())),
+        ControlResponse::Error { message } => Err(Error::Session(message)),
+        other => Err(Error::Session(format!(
+            "received an unexpected control response while removing a port forward: {:?}",
+            other
+        ))),
     }
 }
 
@@ -219,6 +312,26 @@ async fn handle_stream(
             || {
                 Err(Error::PersistentState(
                     "the local tunnel runtime is not accepting live control requests yet".into(),
+                ))
+            },
+        )
+        .await,
+        Ok(ControlRequest::PortsAdd { definition }) => round_trip_runtime_request(
+            requests,
+            move |reply| RuntimeControlRequest::PortsAdd { definition, reply },
+            || {
+                Err(Error::PersistentState(
+                    "the local tunnel runtime is not accepting port-management requests yet".into(),
+                ))
+            },
+        )
+        .await,
+        Ok(ControlRequest::PortsRemove { id }) => round_trip_runtime_request(
+            requests,
+            move |reply| RuntimeControlRequest::PortsRemove { id, reply },
+            || {
+                Err(Error::PersistentState(
+                    "the local tunnel runtime is not accepting port-management requests yet".into(),
                 ))
             },
         )

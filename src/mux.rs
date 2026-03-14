@@ -25,6 +25,7 @@ use crate::{
 #[serde(rename_all = "kebab-case")]
 pub enum ChannelKind {
     PortForward,
+    PortControl,
     Echo,
     Pipe,
     Shell,
@@ -445,20 +446,22 @@ impl WireFrame {
 fn kind_code(kind: ChannelKind) -> u8 {
     match kind {
         ChannelKind::PortForward => 0,
-        ChannelKind::Echo => 1,
-        ChannelKind::Pipe => 2,
-        ChannelKind::Shell => 3,
-        ChannelKind::FileTransfer => 4,
+        ChannelKind::PortControl => 1,
+        ChannelKind::Echo => 2,
+        ChannelKind::Pipe => 3,
+        ChannelKind::Shell => 4,
+        ChannelKind::FileTransfer => 5,
     }
 }
 
 fn decode_kind(code: u8) -> Result<ChannelKind> {
     match code {
         0 => Ok(ChannelKind::PortForward),
-        1 => Ok(ChannelKind::Echo),
-        2 => Ok(ChannelKind::Pipe),
-        3 => Ok(ChannelKind::Shell),
-        4 => Ok(ChannelKind::FileTransfer),
+        1 => Ok(ChannelKind::PortControl),
+        2 => Ok(ChannelKind::Echo),
+        3 => Ok(ChannelKind::Pipe),
+        4 => Ok(ChannelKind::Shell),
+        5 => Ok(ChannelKind::FileTransfer),
         other => Err(Error::Session(format!(
             "received an unknown live tunnel channel kind {other}"
         ))),
