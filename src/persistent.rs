@@ -761,8 +761,8 @@ pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
         .source
         .as_ref()
         .ok_or_else(|| Error::Usage("send-file needs a local SOURCE file to send".into()))?;
-    let source_path = if source.is_absolute() {
-        source.clone()
+    let source_path = if source.is_absolute() || source.starts_with("~") {
+        file_transfer::expand_user_path(source)?
     } else {
         cwd.join(source)
     };

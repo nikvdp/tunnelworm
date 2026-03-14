@@ -44,6 +44,20 @@ pub struct LocalFileTransferSource {
     pub bytes: u64,
 }
 
+pub fn expand_user_path(path: &Path) -> Result<PathBuf> {
+    let value = path.as_os_str().to_string_lossy();
+    if value == "~" {
+        return user_home_dir();
+    }
+    if let Some(rest) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        return Ok(user_home_dir()?.join(rest));
+    }
+    Ok(path.to_path_buf())
+}
+
 pub async fn bridge_local_file_stream(stream: AsyncStream, channel: MuxChannel) -> Result<()> {
     let mut reader = stream.clone();
     let mut writer = stream;
@@ -218,7 +232,7 @@ fn resolve_destination_path(base_dir: &Path, open: &FileTransferOpen) -> Result<
         .ok_or_else(|| Error::Usage("source file name must have a basename".into()))?;
 
     let destination = match &open.destination_path {
-        Some(path) => PathBuf::from(path),
+        Some(path) => expand_user_path(Path::new(path))?,
         None => PathBuf::from(source_name),
     };
 
@@ -229,6 +243,33 @@ fn resolve_destination_path(base_dir: &Path, open: &FileTransferOpen) -> Result<
     };
 
     Ok(resolved)
+}
+
+fn user_home_dir() -> Result<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(path) = std::env::var_os("USERPROFILE") {
+            return Ok(PathBuf::from(path));
+        }
+        let drive = std::env::var_os("HOMEDRIVE");
+        let home = std::env::var_os("HOMEPATH");
+        if let (Some(drive), Some(home)) = (drive, home) {
+            return Ok(PathBuf::from(drive).join(home));
+        }
+        Err(Error::Session(
+            "could not resolve the home directory for `~` expansion on this machine".into(),
+        ))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| {
+            Error::Session(
+                "could not resolve the home directory for `~` expansion on this machine".into(),
+            )
+        })?;
+        Ok(PathBuf::from(home))
+    }
 }
 
 fn ensure_destination_parent(destination: &Path) -> Result<()> {
