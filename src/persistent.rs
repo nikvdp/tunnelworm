@@ -1,13 +1,12 @@
 use std::{
     env,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use async_std::io::WriteExt;
-use fs2::FileExt;
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 
@@ -869,7 +868,13 @@ pub fn list_tunnel_ports(config: &TunnelPortsListConfig) -> Result<()> {
         println!("  none");
         return Ok(());
     }
-    let state_label = if persistent_worker_running(&state_path)? {
+    let state_label = if matches!(
+        runtime,
+        ResolvedTunnelRuntime::Live(TunnelRuntimeStatus {
+            phase: TunnelRuntimePhase::Up,
+            ..
+        })
+    ) {
         "active"
     } else {
         "pending"
@@ -1036,7 +1041,12 @@ fn resolve_live_tunnel_handle(
         Error::PersistentState("a live tunnel command needs either a tunnel name or --state".into())
     })?;
 
-    if let Some((state_path, state)) = find_state_by_name(cwd, handle)? {
+    if let Some((state_path, state)) = find_state_by_name(cwd, handle)?
+        && matches!(
+            current_tunnel_runtime(&state_path)?,
+            ResolvedTunnelRuntime::Live(_)
+        )
+    {
         return Ok((state_path, state, None));
     }
 
@@ -1183,41 +1193,10 @@ pub fn runtime_status_path(state_path: &Path) -> PathBuf {
 }
 
 fn current_tunnel_runtime(state_path: &Path) -> Result<ResolvedTunnelRuntime> {
-    if !persistent_worker_running(state_path)? {
-        return Ok(ResolvedTunnelRuntime::Stopped);
-    }
-
     if let Some(ControlResponse::Probe { runtime, .. }) = probe_runtime(state_path)? {
         return Ok(ResolvedTunnelRuntime::Live(runtime));
     }
-
-    let runtime_path = runtime_status_path(state_path);
-    let status = load_runtime_status(&runtime_path).unwrap_or(TunnelRuntimeStatus {
-        phase: TunnelRuntimePhase::Starting,
-        detail: Some("persistent worker is starting".into()),
-    });
-    Ok(ResolvedTunnelRuntime::Live(status))
-}
-
-fn persistent_worker_running(state_path: &Path) -> Result<bool> {
-    let lock_path = state_path.with_extension("lock");
-    if !lock_path.exists() {
-        return Ok(false);
-    }
-
-    let lock_file = File::options().read(true).write(true).open(&lock_path)?;
-    match lock_file.try_lock_exclusive() {
-        Ok(()) => {
-            lock_file.unlock()?;
-            Ok(false)
-        }
-        Err(_) => Ok(true),
-    }
-}
-
-fn load_runtime_status(path: &Path) -> Result<TunnelRuntimeStatus> {
-    let bytes = fs::read(path)?;
-    Ok(serde_json::from_slice(&bytes)?)
+    Ok(ResolvedTunnelRuntime::Stopped)
 }
 
 #[derive(Debug, Clone)]
@@ -1363,7 +1342,10 @@ fn conflicting_state_error(path: &Path, detail: &str) -> Error {
 
 fn prepare_temporary_state_path(state_path: &Path) -> Result<()> {
     if state_path.exists() {
-        if persistent_worker_running(state_path)? {
+        if matches!(
+            current_tunnel_runtime(state_path)?,
+            ResolvedTunnelRuntime::Live(_)
+        ) {
             return Err(Error::PersistentState(format!(
                 "a tunnel worker is already running for {}; stop it before starting the same temporary tunnel again",
                 state_path.display()
@@ -1584,8 +1566,13 @@ pub fn remove_state_artifacts(state_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::{ControlRequest, ControlResponse, control_socket_path};
     use crate::persistent_auth;
-    use fs2::FileExt;
+    use async_std::{
+        io::{ReadExt, WriteExt},
+        os::unix::net::UnixListener,
+        task,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1650,7 +1637,7 @@ mod tests {
     struct Fixture {
         root: PathBuf,
         cwd: PathBuf,
-        locks: Vec<File>,
+        socket_paths: Vec<PathBuf>,
     }
 
     struct StateHandle {
@@ -1670,7 +1657,7 @@ mod tests {
             Self {
                 root,
                 cwd,
-                locks: Vec::new(),
+                socket_paths: Vec::new(),
             }
         }
 
@@ -1708,22 +1695,70 @@ mod tests {
                 .expect("runtime status should encode"),
             )
             .expect("runtime status should save");
-            let lock = OpenOptions::new()
-                .create(true)
-                .read(true)
-                .write(true)
-                .truncate(false)
-                .open(path.with_extension("lock"))
-                .expect("lock file should open");
-            lock.try_lock_exclusive()
-                .expect("lock file should be held exclusively");
-            self.locks.push(lock);
+            let socket_path = control_socket_path(&path);
+            if let Some(parent) = socket_path.parent() {
+                fs::create_dir_all(parent).expect("control socket dir should exist");
+            }
+            if socket_path.exists() {
+                let _ = fs::remove_file(&socket_path);
+            }
+            let listener = task::block_on(UnixListener::bind(&socket_path))
+                .expect("control socket should bind");
+            let tunnel_name = state.config.name.clone();
+            let tunnel_code = state.config.code.clone();
+            task::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let mut line = Vec::new();
+                    loop {
+                        let mut byte = [0u8; 1];
+                        let read = stream
+                            .read(&mut byte)
+                            .await
+                            .expect("control socket should read");
+                        if read == 0 {
+                            break;
+                        }
+                        line.push(byte[0]);
+                        if byte[0] == b'\n' {
+                            break;
+                        }
+                    }
+                    let response = match serde_json::from_slice::<ControlRequest>(&line)
+                        .expect("control request should decode")
+                    {
+                        ControlRequest::Probe {} => ControlResponse::Probe {
+                            tunnel_name: tunnel_name.clone(),
+                            code: tunnel_code.clone(),
+                            runtime: TunnelRuntimeStatus {
+                                phase: TunnelRuntimePhase::Up,
+                                detail: Some("peer connected; live tunnel ready".into()),
+                            },
+                            peer_policy_rules: Vec::new(),
+                        },
+                        _ => ControlResponse::Error {
+                            message: "unexpected control request in test fixture".into(),
+                        },
+                    };
+                    let mut bytes =
+                        serde_json::to_vec(&response).expect("control response should encode");
+                    bytes.push(b'\n');
+                    stream
+                        .write_all(&bytes)
+                        .await
+                        .expect("control response should write");
+                    stream.flush().await.expect("control response should flush");
+                }
+            });
+            self.socket_paths.push(socket_path);
             StateHandle { path }
         }
     }
 
     impl Drop for Fixture {
         fn drop(&mut self) {
+            for socket_path in &self.socket_paths {
+                let _ = fs::remove_file(socket_path);
+            }
             let _ = fs::remove_dir_all(&self.root);
         }
     }
