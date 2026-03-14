@@ -4,6 +4,8 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
+    thread,
+    time::{Duration, Instant},
 };
 
 use async_std::io::WriteExt;
@@ -365,10 +367,11 @@ pub async fn create_one_off_tunnel(config: &TunnelConfig) -> Result<()> {
     let persistent = temporary_config(config, code.clone(), role);
     let state_path = resolve_state_path(None, &cwd, &persistent)?;
     prepare_temporary_state_path(&state_path)?;
+    let interrupt = install_frontend_interrupt_notifier()?;
     let mut state = PersistentState::new(persistent.clone(), persistent_auth::generate_identity());
     state.peer_public_key_hex = None;
     save_state(&state_path, &state)?;
-    exec_persistent_daemon(&state_path)
+    run_temporary_daemon(&state_path, interrupt)
 }
 
 pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
@@ -1523,6 +1526,48 @@ fn exec_persistent_daemon(state_path: &Path) -> Result<()> {
     }
 }
 
+fn run_temporary_daemon(state_path: &Path, interrupt: async_channel::Receiver<()>) -> Result<()> {
+    if interrupt.try_recv().is_ok() {
+        remove_state_artifacts(state_path);
+        return Ok(());
+    }
+
+    let daemon_path = persistent_daemon_path()?;
+    let mut child = Command::new(&daemon_path)
+        .arg("--persistent-state")
+        .arg(state_path)
+        .spawn()?;
+    let mut interrupted_at: Option<Instant> = None;
+    let mut forwarded_kill = false;
+
+    loop {
+        if interrupted_at.is_none() && interrupt.try_recv().is_ok() {
+            interrupted_at = Some(Instant::now());
+        }
+
+        if let Some(status) = child.try_wait()? {
+            remove_state_artifacts(state_path);
+            if status.success() || interrupted_at.is_some() {
+                return Ok(());
+            }
+            return Err(Error::PersistentState(format!(
+                "temporary daemon {:?} exited with status {}",
+                daemon_path, status
+            )));
+        }
+
+        if let Some(interrupted_at) = interrupted_at
+            && !forwarded_kill
+            && interrupted_at.elapsed() >= Duration::from_millis(500)
+        {
+            let _ = child.kill();
+            forwarded_kill = true;
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn persistent_daemon_path() -> Result<PathBuf> {
     let current_exe = env::current_exe()?;
     let sibling = current_exe.with_file_name("tunnelwormd");
@@ -1530,6 +1575,15 @@ fn persistent_daemon_path() -> Result<PathBuf> {
         return Ok(sibling);
     }
     Ok(PathBuf::from("tunnelwormd"))
+}
+
+fn install_frontend_interrupt_notifier() -> Result<async_channel::Receiver<()>> {
+    let (tx, rx) = async_channel::bounded(1);
+    ctrlc::set_handler(move || {
+        let _ = tx.try_send(());
+    })
+    .map_err(|error| Error::Session(format!("could not install interrupt handler: {error}")))?;
+    Ok(rx)
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
