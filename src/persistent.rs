@@ -409,7 +409,7 @@ pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
     let (state_path, _state, correction) =
         resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
     if let Some(correction) = correction {
-        println!("{} {correction}", style.label("Resolved:"));
+        eprintln!("{} {correction}", style.label("Resolved:"));
     }
     wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
     let mode = pipe::infer_pipe_mode(config.mode)?;
@@ -422,7 +422,7 @@ pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
     let (state_path, _state, correction) =
         resolve_live_tunnel_handle(config.state.as_deref(), config.name.as_deref(), &cwd)?;
     if let Some(correction) = correction {
-        println!("{} {correction}", style.label("Resolved:"));
+        eprintln!("{} {correction}", style.label("Resolved:"));
     }
     wait_for_live_tunnel_ready(&state_path, config.name.as_deref()).await?;
     let mut stream = async_std::os::unix::net::UnixStream::connect(control_socket_path(&state_path))
@@ -451,7 +451,7 @@ pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
     let style = stdout_style();
     let (state_path, state, correction) = resolve_live_tunnel_handle(None, Some(&config.name), &cwd)?;
     if let Some(correction) = correction {
-        println!("{} {correction}", style.label("Resolved:"));
+        eprintln!("{} {correction}", style.label("Resolved:"));
     }
     wait_for_live_tunnel_ready(&state_path, Some(&config.name)).await?;
     let source_path = if config.source.is_absolute() {
@@ -1031,22 +1031,8 @@ fn print_tunnel_intro(
     if heading == "Tunnel create:" {
         println!();
         println!("{}", style.heading("Peer commands"));
-        match config.local_half() {
-            crate::cli::ForwardHalf::Listen => {
-                println!(
-                    "  {} tunnelworm tunnel create PEER_NAME --connect HOST:PORT --code {}",
-                    style.label("preferred:"),
-                    code
-                );
-            },
-            crate::cli::ForwardHalf::Connect => {
-                println!(
-                    "  {} tunnelworm tunnel create PEER_NAME --listen LISTEN_HOST:LISTEN_PORT --code {}",
-                    style.label("preferred:"),
-                    code
-                );
-            },
-            crate::cli::ForwardHalf::Mixed => {},
+        if let Some(preferred) = config.peer_preferred_command(code, true) {
+            println!("  {} {}", style.label("preferred:"), preferred);
         }
         if let Some(ssh_style) = config.peer_ssh_command(code) {
             println!("  {} {}", style.label("ssh-style:"), ssh_style);
@@ -1065,6 +1051,7 @@ fn temporary_tunnel_name(config: &TunnelConfig, code: &str) -> String {
     let half = match config.local_half() {
         crate::cli::ForwardHalf::Listen => "listen",
         crate::cli::ForwardHalf::Connect => "connect",
+        crate::cli::ForwardHalf::None => "open",
         crate::cli::ForwardHalf::Mixed => "mixed",
     };
     format!("tmp-{half}-{}", slugify_tunnel_name(code))

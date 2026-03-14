@@ -1039,7 +1039,7 @@ async fn run_temporary_tunnel(
     .await?;
     if state.config.code.is_empty() {
         state.config.code = prepared.code.clone();
-        state.config.name = temporary_tunnel_name(role, &state.config.code);
+        state.config.name = temporary_tunnel_name(&state.config, &state.config.code);
         save_state(state_path, state)?;
     }
     print_temporary_intro(style, state);
@@ -1159,7 +1159,7 @@ fn temporary_local_summary(config: &crate::persistent::PersistentConfig) -> Stri
                 .unwrap_or_else(|| "PORT".into())
         );
     }
-    "multiple forward halves".into()
+    "no ports configured yet".into()
 }
 
 fn temporary_peer_preferred_command(
@@ -1172,6 +1172,8 @@ fn temporary_peer_preferred_command(
             "tunnelworm --listen LISTEN_HOST:LISTEN_PORT {}",
             config.code
         ))
+    } else if config.locals.is_empty() && config.remotes.is_empty() {
+        Some(format!("tunnelworm open {}", config.code))
     } else {
         None
     }
@@ -1201,10 +1203,12 @@ fn temporary_peer_ssh_command(config: &crate::persistent::PersistentConfig) -> O
     None
 }
 
-fn temporary_tunnel_name(role: PersistentRole, code: &str) -> String {
-    let half = match role {
-        PersistentRole::Allocate => "connect",
-        PersistentRole::Join => "listen",
+fn temporary_tunnel_name(config: &crate::persistent::PersistentConfig, code: &str) -> String {
+    let half = match (!config.locals.is_empty(), !config.remotes.is_empty()) {
+        (true, false) => "listen",
+        (false, true) => "connect",
+        (false, false) => "open",
+        (true, true) => "mixed",
     };
     format!("tmp-{half}-{code}")
 }

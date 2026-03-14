@@ -205,11 +205,6 @@ pub fn build_cli_plan(here: &CliIntent, there: &CliIntent) -> Result<ForwardPlan
         }
     }
 
-    if listeners.is_empty() && targets.is_empty() {
-        return Err(Error::Usage(
-            "no resolved forwarding rules were negotiated with the peer".into(),
-        ));
-    }
     if !listeners.is_empty() && !targets.is_empty() {
         return Err(Error::Usage(
             "bidirectional forwarding in one wormhole session is not supported yet".into(),

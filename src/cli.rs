@@ -14,8 +14,9 @@ use crate::{
 const TUNNELWORM_LONG_ABOUT: &str = "\
 Create a TCP port forward between two terminals over a magic-wormhole session.
 
-Top-level `tunnelworm ...` is the one-off path.
-`tunnelworm tunnel create ...` bootstraps a named persistent tunnel.
+Top-level `tunnelworm ...` keeps the one-off forwarding path.
+`tunnelworm open ...` opens a bare one-off tunnel with no port forward yet.
+`tunnelworm tunnel create ...` bootstraps a named persistent tunnel, with or without an initial port forward.
 `tunnelworm tunnel up ...` starts a saved persistent tunnel by name.
 `tunnelworm tunnel list`, `status`, and `delete` manage saved tunnel endpoints.
 `tunnelworm pipe <name>` streams stdin/stdout over one live named tunnel.
@@ -28,11 +29,23 @@ corresponding `-R` on the peer and `-R` still needs a corresponding `-L`.";
 
 const TUNNELWORM_AFTER_HELP: &str = "\
 Examples:
+  Open a bare one-off tunnel and print a code:
+    tunnelworm open
+
+  Join that bare one-off tunnel with the printed code:
+    tunnelworm open 7-cobalt-signal
+
   One-off forward, connector side allocates a code:
     tunnelworm --connect 22
 
   Matching one-off peer listens locally with that code:
     tunnelworm --listen 9000 7-cobalt-signal
+
+  Named persistent tunnel, creator side bootstraps a saved tunnel with no initial forward:
+    tunnelworm tunnel create office
+
+  Named persistent tunnel, peer side joins that bare tunnel with the printed code:
+    tunnelworm tunnel create laptop --code 7-cobalt-signal
 
   Named persistent tunnel, creator side bootstraps a saved tunnel:
     tunnelworm tunnel create office-ssh --connect 22
@@ -83,6 +96,12 @@ Notes:
 
 const TUNNEL_CREATE_AFTER_HELP: &str = "\
 Examples:
+  Create one saved tunnel endpoint with no initial port forward:
+    tunnelworm tunnel create office
+
+  Create the peer side of that bare tunnel using the printed code:
+    tunnelworm tunnel create laptop --code 7-cobalt-signal
+
   Create the service side of a saved tunnel and print a bootstrap code:
     tunnelworm tunnel create office-ssh --connect 22
 
@@ -91,6 +110,9 @@ Examples:
 
 const TUNNEL_AFTER_HELP: &str = "\
 Examples:
+  Create one saved tunnel endpoint with no initial port forward:
+    tunnelworm tunnel create office
+
   Create the service side of a saved tunnel:
     tunnelworm tunnel create office-ssh --connect 22
 
@@ -101,6 +123,9 @@ const TUNNEL_UP_AFTER_HELP: &str = "\
 Examples:
   Start a saved tunnel endpoint by name:
     tunnelworm tunnel up laptop-ssh
+
+  Start one bare saved tunnel endpoint by name:
+    tunnelworm tunnel up office
 
   Start a saved tunnel endpoint by explicit state file:
     tunnelworm tunnel up --state ./.tunnelworm/laptop-ssh--abcd1234.json";
@@ -166,6 +191,18 @@ Examples:
 Notes:
   Without --command, tunnelworm starts the remote user's login shell.";
 
+const OPEN_AFTER_HELP: &str = "\
+Examples:
+  Open a bare one-off tunnel and print a bootstrap code:
+    tunnelworm open
+
+  Join a bare one-off tunnel with the printed code:
+    tunnelworm open 7-cobalt-signal
+
+Notes:
+  A bare tunnel has no port forward yet.
+  Use shell, pipe, send-file, or later port management against the live tunnel.";
+
 const COMPLETION_AFTER_HELP: &str = "\
 Examples:
   Print a zsh completion script:
@@ -196,10 +233,11 @@ fn help_header(value: &str) -> String {
 
 fn styled_top_level_long_about() -> StyledStr {
     StyledStr::from(format!(
-        "{}\n\n{}:\n  {}  Create a one-off forward between two terminals\n  {}  Create one named persistent tunnel endpoint\n  {}      Start one saved tunnel endpoint by name\n\n{}:\n  {}         List saved tunnel endpoints\n  {}       Inspect one saved tunnel endpoint\n  {}       Remove one saved tunnel endpoint\n\n{}:\n  Use {} on one side and {} on the peer.\n  If you use {} or {} instead, they still need the opposite half on the peer.",
+        "{}\n\n{}:\n  {}  Create a one-off forward between two terminals\n  {}       Open one bare one-off tunnel\n  {}  Create one named persistent tunnel endpoint\n  {}      Start one saved tunnel endpoint by name\n\n{}:\n  {}         List saved tunnel endpoints\n  {}       Inspect one saved tunnel endpoint\n  {}       Remove one saved tunnel endpoint\n\n{}:\n  Use {} on one side and {} on the peer.\n  If you use {} or {} instead, they still need the opposite half on the peer.",
         help_bold("Create a TCP port forward between two terminals over a magic-wormhole session."),
         help_header("Preferred workflows"),
         help_bold("tunnelworm ..."),
+        help_bold("tunnelworm open ..."),
         help_bold("tunnelworm tunnel create ..."),
         help_bold("tunnelworm tunnel up ..."),
         help_header("Management"),
@@ -255,6 +293,16 @@ fn styled_tunnel_up_after_help() -> StyledStr {
         help_header("Examples"),
         help_bold("Start a saved endpoint by name"),
         help_bold("Start a saved endpoint by explicit state file"),
+    ))
+}
+
+fn styled_open_after_help() -> StyledStr {
+    StyledStr::from(format!(
+        "{}:\n  {}:\n    tunnelworm open\n\n  {}:\n    tunnelworm open 7-cobalt-signal\n\n{}:\n  - A bare tunnel has no port forward yet.\n  - Use shell, pipe, send-file, or later port management against the live tunnel.",
+        help_header("Examples"),
+        help_bold("Open a bare one-off tunnel and print a code"),
+        help_bold("Join a bare one-off tunnel with that code"),
+        help_header("Notes"),
     ))
 }
 
@@ -340,6 +388,7 @@ pub fn tunnelworm_command() -> Command {
         .mut_subcommand("completion", |sub| {
             sub.after_long_help(styled_completion_after_help())
         })
+        .mut_subcommand("open", |sub| sub.after_long_help(styled_open_after_help()))
         .mut_subcommand("self-update", |sub| {
             sub.after_long_help(styled_self_update_after_help())
         })
@@ -373,6 +422,7 @@ pub fn tunnelworm_completion_command() -> Command {
         .mut_subcommand("completion", |sub| {
             sub.after_long_help(styled_completion_after_help())
         })
+        .mut_subcommand("open", |sub| sub.after_long_help(styled_open_after_help()))
         .mut_subcommand("self-update", |sub| {
             sub.after_long_help(styled_self_update_after_help())
         })
@@ -459,6 +509,7 @@ pub struct TunnelSendFileConfig {
 #[derive(Debug, Clone)]
 pub enum TunnelwormInvocation {
     Run(TunnelConfig),
+    Open(TunnelConfig),
     Completion(Shell),
     SelfUpdate,
     Pipe(TunnelPipeConfig),
@@ -475,6 +526,7 @@ pub enum TunnelwormInvocation {
 pub enum ForwardHalf {
     Listen,
     Connect,
+    None,
     Mixed,
 }
 
@@ -575,6 +627,18 @@ pub struct TopLevelArgs {
 pub struct CompletionTopLevelArgs {
     #[command(flatten)]
     pub common: CommonSessionArgs,
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "Open a bare one-off tunnel with no initial port forward")]
+#[command(after_long_help = OPEN_AFTER_HELP)]
+pub struct TunnelOpenArgs {
+    #[arg(long = "mailbox", help = "Override the mailbox websocket URL")]
+    pub mailbox: Option<String>,
+    #[arg(long = "code-length", default_value_t = 2, help = "Number of words to allocate when creating a new code")]
+    pub code_length: usize,
+    #[arg(value_name = "CODE", help = "Existing wormhole code to join; omit it to allocate a new code")]
+    pub code: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -721,6 +785,7 @@ pub struct TunnelwormCompletionCli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum TunnelwormSubcommand {
     Completion(CompletionArgs),
+    Open(TunnelOpenArgs),
     SelfUpdate(SelfUpdateArgs),
     Pipe(TunnelPipeArgs),
     #[command(alias = "send")]
@@ -748,6 +813,16 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
     fn try_from(value: TunnelwormCli) -> Result<Self> {
         match value.command {
             Some(TunnelwormSubcommand::Completion(args)) => Ok(Self::Completion(args.shell)),
+            Some(TunnelwormSubcommand::Open(args)) => Ok(Self::Open(TunnelConfig {
+                tunnel_name: None,
+                mailbox: args.mailbox,
+                code_length: args.code_length,
+                code: args.code,
+                locals: Vec::new(),
+                remotes: Vec::new(),
+                state: None,
+                overwrite: false,
+            })),
             Some(TunnelwormSubcommand::SelfUpdate(_)) => Ok(Self::SelfUpdate),
             Some(TunnelwormSubcommand::Pipe(args)) => Ok(Self::Pipe(TunnelPipeConfig {
                 name: args.name,
@@ -777,7 +852,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                     args.code,
                     None,
                     args.overwrite,
-                    false,
+                    true,
                     Some(args.name),
                 )?)),
                 TunnelCommand::Up(args) => Ok(Self::TunnelUp(TunnelUpConfig {
@@ -876,6 +951,7 @@ impl TunnelConfig {
         match (!self.locals.is_empty(), !self.remotes.is_empty()) {
             (true, false) => ForwardHalf::Listen,
             (false, true) => ForwardHalf::Connect,
+            (false, false) => ForwardHalf::None,
             _ => ForwardHalf::Mixed,
         }
     }
@@ -902,6 +978,7 @@ impl TunnelConfig {
                         .unwrap_or_else(|| "PORT".into())
                 )
             },
+            ForwardHalf::None => "no ports configured yet".into(),
             ForwardHalf::Mixed => "multiple forward halves".into(),
         }
     }
@@ -912,6 +989,13 @@ impl TunnelConfig {
             ForwardHalf::Listen => Some(format!("{prefix} --connect HOST:PORT {code}")),
             ForwardHalf::Connect => {
                 Some(format!("{prefix} --listen LISTEN_HOST:LISTEN_PORT {code}"))
+            },
+            ForwardHalf::None => {
+                if persistent {
+                    Some(format!("tunnelworm tunnel create PEER_NAME --code {code}"))
+                } else {
+                    Some(format!("tunnelworm open {code}"))
+                }
             },
             ForwardHalf::Mixed => None,
         }
@@ -939,7 +1023,7 @@ impl TunnelConfig {
                     .map(|port| port.to_string())
                     .unwrap_or_else(|| "PORT".into())
             )),
-            ForwardHalf::Mixed => None,
+            ForwardHalf::None | ForwardHalf::Mixed => None,
         }
     }
 
@@ -971,6 +1055,14 @@ impl TunnelConfig {
                         .map(|port| port.to_string())
                         .unwrap_or_else(|| "PORT".into())
                 );
+                if self.code.is_some() {
+                    Some(format!("{base} --code {code} --overwrite"))
+                } else {
+                    Some(format!("{base} --overwrite"))
+                }
+            },
+            ForwardHalf::None => {
+                let base = format!("tunnelworm tunnel create {}", tunnel_name);
                 if self.code.is_some() {
                     Some(format!("{base} --code {code} --overwrite"))
                 } else {

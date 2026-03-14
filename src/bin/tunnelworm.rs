@@ -22,6 +22,7 @@ async fn main() {
 
     let result = match invocation {
         TunnelwormInvocation::Run(config) => persistent::create_one_off_tunnel(&config).await,
+        TunnelwormInvocation::Open(config) => persistent::create_one_off_tunnel(&config).await,
         TunnelwormInvocation::Completion(shell) => {
             let mut command = tunnelworm_completion_command();
             let name = command.get_name().to_string();
