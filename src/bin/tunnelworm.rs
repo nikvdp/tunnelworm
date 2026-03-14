@@ -89,7 +89,7 @@ async fn main() {
             persistent::create_named_tunnel(&config).await
         }
         TunnelwormInvocation::TunnelUp(config) => persistent::up_named_tunnel(&config),
-        TunnelwormInvocation::TunnelList => persistent::list_named_tunnels(),
+        TunnelwormInvocation::TunnelList(config) => persistent::list_named_tunnels(&config),
         TunnelwormInvocation::TunnelStatus(config) => persistent::print_status(&config),
         TunnelwormInvocation::TunnelDelete(config) => persistent::delete_named_tunnel(&config),
     };

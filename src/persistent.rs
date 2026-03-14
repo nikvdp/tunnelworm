@@ -365,7 +365,7 @@ pub async fn create_one_off_tunnel(config: &TunnelConfig) -> Result<()> {
         None => (String::new(), PersistentRole::Allocate),
     };
     let persistent = temporary_config(config, code.clone(), role);
-    let state_path = resolve_state_path(None, &cwd, &persistent)?;
+    let state_path = resolve_state_path(None, config.state_dir.as_deref(), &cwd, &persistent)?;
     prepare_temporary_state_path(&state_path)?;
     let interrupt = install_frontend_interrupt_notifier()?;
     let mut state = PersistentState::new(persistent.clone(), persistent_auth::generate_identity());
@@ -382,7 +382,9 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
         .as_deref()
         .ok_or_else(|| Error::Usage("tunnel create needs a local tunnel name".into()))?;
 
-    if let Some((existing_path, _)) = find_state_by_name(&cwd, tunnel_name)? {
+    if let Some((existing_path, _)) =
+        find_state_by_name(&cwd, config.state_dir.as_deref(), tunnel_name)?
+    {
         if !config.overwrite {
             return Err(Error::PersistentState(format!(
                 "a saved tunnel named {:?} already exists at {}. Use `tunnelworm tunnel up {}` to start it, `tunnelworm tunnel delete {}` to remove it later, or rerun `tunnelworm tunnel create {}` with --overwrite to replace it.",
@@ -402,7 +404,12 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
 
     if let Some(code) = &config.code {
         let expected = PersistentConfig::from_join_config(config, code.clone());
-        let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
+        let state_path = resolve_state_path(
+            config.state.as_deref(),
+            config.state_dir.as_deref(),
+            &cwd,
+            &expected,
+        )?;
         print_tunnel_intro(&style, "Tunnel create:", &expected.code, config);
         print_state_block(&style, config, &state_path, &expected.code);
         println!();
@@ -438,7 +445,9 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
             );
             fs::remove_file(path)?;
         }
-    } else if let Some((state_path, state)) = find_existing_creator_state(&cwd, config)? {
+    } else if let Some((state_path, state)) =
+        find_existing_creator_state(&cwd, config.state_dir.as_deref(), config)?
+    {
         if !config.overwrite {
             print_tunnel_intro(&style, "Persistent reuse:", &state.config.code, config);
             print_state_block(&style, config, &state_path, &state.config.code);
@@ -455,7 +464,12 @@ pub async fn create_named_tunnel(config: &TunnelConfig) -> Result<()> {
 
     let prepared = session::prepare_session(SessionOptions::from(config)).await?;
     let expected = PersistentConfig::from_allocate_config(config, prepared.code.clone());
-    let state_path = resolve_state_path(config.state.as_deref(), &cwd, &expected)?;
+    let state_path = resolve_state_path(
+        config.state.as_deref(),
+        config.state_dir.as_deref(),
+        &cwd,
+        &expected,
+    )?;
     print_tunnel_intro(&style, "Tunnel create:", &prepared.code, config);
     print_state_block(&style, config, &state_path, &prepared.code);
     println!();
@@ -492,13 +506,18 @@ async fn connect_with_spinner(
 pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, state) =
-        resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, state) = resolve_named_state(
+        config.state.as_deref(),
+        config.state_dir.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+    )?;
     let replay_config = TunnelConfig {
         tunnel_name: Some(state.config.name.clone()),
         mailbox: state.config.mailbox.clone(),
         code_length: 2,
         code: Some(state.config.code.clone()),
+        state_dir: config.state_dir.clone(),
         policy_rules: state.config.policy_rules.clone(),
         locals: state.config.locals.clone(),
         remotes: state.config.remotes.clone(),
@@ -517,10 +536,10 @@ pub fn up_named_tunnel(config: &TunnelUpConfig) -> Result<()> {
     exec_persistent_daemon(&state_path)
 }
 
-pub fn list_named_tunnels() -> Result<()> {
+pub fn list_named_tunnels(config: &crate::cli::TunnelListConfig) -> Result<()> {
     let style = stdout_style();
     let cwd = env::current_dir()?;
-    let entries = list_saved_tunnels(&cwd)?;
+    let entries = list_saved_tunnels(&cwd, config.state_dir.as_deref())?;
 
     println!("{}", style.heading("Saved tunnels"));
     if entries.is_empty() {
@@ -555,8 +574,12 @@ pub fn list_named_tunnels() -> Result<()> {
 pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
     let style = stdout_style();
     let cwd = env::current_dir()?;
-    let (state_path, state) =
-        resolve_status_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, state) = resolve_status_state(
+        config.state.as_deref(),
+        config.state_dir.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+    )?;
 
     println!(
         "{} {}",
@@ -638,8 +661,12 @@ pub fn print_status(config: &TunnelStatusConfig) -> Result<()> {
 
 pub fn delete_named_tunnel(config: &TunnelDeleteConfig) -> Result<()> {
     let cwd = env::current_dir()?;
-    let (state_path, state) =
-        resolve_named_state(config.state.as_deref(), config.name.as_deref(), &cwd)?;
+    let (state_path, state) = resolve_named_state(
+        config.state.as_deref(),
+        config.state_dir.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+    )?;
     let lock_path = state_path.with_extension("lock");
 
     fs::remove_file(&state_path)?;
@@ -659,6 +686,7 @@ pub async fn run_named_pipe(config: &TunnelPipeConfig) -> Result<()> {
     let style = stdout_style();
     let (state_path, _state, correction) = resolve_live_tunnel_target(
         config.state.as_deref(),
+        config.state_dir.as_deref(),
         config.name.as_deref(),
         &cwd,
         "pipe over",
@@ -685,6 +713,7 @@ pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
     let style = stdout_style();
     let (state_path, _state, correction) = resolve_live_tunnel_target(
         config.state.as_deref(),
+        config.state_dir.as_deref(),
         config.name.as_deref(),
         &cwd,
         "open a shell over",
@@ -717,8 +746,13 @@ pub async fn run_named_shell(config: &TunnelShellConfig) -> Result<u32> {
 pub async fn run_named_send_file(config: &TunnelSendFileConfig) -> Result<()> {
     let cwd = env::current_dir()?;
     let style = stdout_style();
-    let (state_path, state, correction) =
-        resolve_live_tunnel_target(None, config.name.as_deref(), &cwd, "send a file over")?;
+    let (state_path, state, correction) = resolve_live_tunnel_target(
+        None,
+        config.state_dir.as_deref(),
+        config.name.as_deref(),
+        &cwd,
+        "send a file over",
+    )?;
     if let Some(correction) = correction {
         eprintln!("{} {correction}", style.label("Resolved:"));
     }
@@ -871,6 +905,7 @@ pub fn list_tunnel_ports(config: &TunnelPortsListConfig) -> Result<()> {
     let style = stdout_style();
     let (state_path, state, correction) = resolve_live_tunnel_target(
         config.state.as_deref(),
+        config.state_dir.as_deref(),
         config.name.as_deref(),
         &cwd,
         "list ports on",
@@ -908,6 +943,7 @@ pub async fn add_tunnel_port(config: &TunnelPortsAddConfig) -> Result<()> {
     let style = stdout_style();
     let (state_path, _state, correction) = resolve_live_tunnel_target(
         config.state.as_deref(),
+        config.state_dir.as_deref(),
         config.name.as_deref(),
         &cwd,
         "add ports to",
@@ -932,6 +968,7 @@ pub async fn remove_tunnel_port(config: &TunnelPortsRemoveConfig) -> Result<()> 
     let style = stdout_style();
     let (state_path, _state, correction) = resolve_live_tunnel_target(
         config.state.as_deref(),
+        config.state_dir.as_deref(),
         config.name.as_deref(),
         &cwd,
         "remove ports from",
@@ -954,13 +991,12 @@ pub async fn remove_tunnel_port(config: &TunnelPortsRemoveConfig) -> Result<()> 
 
 fn find_existing_creator_state(
     cwd: &Path,
+    state_dir: Option<&Path>,
     config: &TunnelConfig,
 ) -> Result<Option<(PathBuf, PersistentState)>> {
     let mut matches = Vec::new();
-    for dir in [project_state_dir(cwd), user_state_dir()?] {
-        if !dir.exists() {
-            continue;
-        }
+    let dir = configured_state_dir(cwd, state_dir)?;
+    if dir.exists() {
         for entry in fs::read_dir(&dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -986,8 +1022,12 @@ fn find_existing_creator_state(
     }
 }
 
-fn find_state_by_name(cwd: &Path, name: &str) -> Result<Option<(PathBuf, PersistentState)>> {
-    let matches = list_saved_tunnels(cwd)?
+fn find_state_by_name(
+    cwd: &Path,
+    state_dir: Option<&Path>,
+    name: &str,
+) -> Result<Option<(PathBuf, PersistentState)>> {
+    let matches = list_saved_tunnels(cwd, state_dir)?
         .into_iter()
         .filter(|(_, state)| state.config.name == name)
         .collect::<Vec<_>>();
@@ -1012,10 +1052,11 @@ fn matches_creator_config(state: &PersistentState, config: &TunnelConfig) -> boo
 
 fn resolve_status_state(
     explicit: Option<&Path>,
+    state_dir: Option<&Path>,
     name: Option<&str>,
     cwd: &Path,
 ) -> Result<(PathBuf, PersistentState)> {
-    resolve_named_state(explicit, name, cwd).map_err(|error| match error {
+    resolve_named_state(explicit, state_dir, name, cwd).map_err(|error| match error {
         Error::PersistentState(message) if message.contains("tunnel up needs either") => {
             Error::PersistentState("tunnel status needs either a tunnel name or --state".into())
         }
@@ -1025,6 +1066,7 @@ fn resolve_status_state(
 
 fn resolve_named_state(
     explicit: Option<&Path>,
+    state_dir: Option<&Path>,
     name: Option<&str>,
     cwd: &Path,
 ) -> Result<(PathBuf, PersistentState)> {
@@ -1060,7 +1102,7 @@ fn resolve_named_state(
     let name = name.ok_or_else(|| {
         Error::PersistentState("tunnel up needs either a tunnel name or --state".into())
     })?;
-    find_state_by_name(cwd, name)?.ok_or_else(|| {
+    find_state_by_name(cwd, state_dir, name)?.ok_or_else(|| {
         Error::PersistentState(format!(
             "no saved tunnel endpoint named {:?} was found; create it first with `tunnelworm tunnel create {}` or point `tunnelworm tunnel up` at a specific file with --state",
             name, name
@@ -1070,11 +1112,12 @@ fn resolve_named_state(
 
 fn resolve_live_tunnel_handle(
     explicit: Option<&Path>,
+    state_dir: Option<&Path>,
     handle: Option<&str>,
     cwd: &Path,
 ) -> Result<(PathBuf, PersistentState, Option<String>)> {
     if let Some(path) = explicit {
-        let (state_path, state) = resolve_named_state(Some(path), None, cwd)?;
+        let (state_path, state) = resolve_named_state(Some(path), None, None, cwd)?;
         return Ok((state_path, state, None));
     }
 
@@ -1082,7 +1125,7 @@ fn resolve_live_tunnel_handle(
         Error::PersistentState("a live tunnel command needs either a tunnel name or --state".into())
     })?;
 
-    if let Some((state_path, state)) = find_state_by_name(cwd, handle)?
+    if let Some((state_path, state)) = find_state_by_name(cwd, state_dir, handle)?
         && matches!(
             current_tunnel_runtime(&state_path)?,
             ResolvedTunnelRuntime::Live(_)
@@ -1091,7 +1134,7 @@ fn resolve_live_tunnel_handle(
         return Ok((state_path, state, None));
     }
 
-    if let Some((state_path, state)) = find_live_temporary_state_by_code(cwd, handle)? {
+    if let Some((state_path, state)) = find_live_temporary_state_by_code(cwd, state_dir, handle)? {
         return Ok((
             state_path,
             state.clone(),
@@ -1110,15 +1153,16 @@ fn resolve_live_tunnel_handle(
 
 fn resolve_live_tunnel_target(
     explicit: Option<&Path>,
+    state_dir: Option<&Path>,
     handle: Option<&str>,
     cwd: &Path,
     action: &str,
 ) -> Result<(PathBuf, PersistentState, Option<String>)> {
     if explicit.is_some() || handle.is_some() {
-        return resolve_live_tunnel_handle(explicit, handle, cwd);
+        return resolve_live_tunnel_handle(explicit, state_dir, handle, cwd);
     }
 
-    let live_names = live_tunnel_names(cwd)?;
+    let live_names = live_tunnel_names(cwd, state_dir)?;
     if live_names.is_empty() {
         return Err(Error::Usage(format!(
             "no live tunnels are running locally, so there is no tunnel to {action}; start one first with `tunnelworm open` or `tunnelworm tunnel up <name>`"
@@ -1171,10 +1215,11 @@ async fn wait_for_live_tunnel_ready(state_path: &Path, handle: Option<&str>) -> 
 
 fn find_live_temporary_state_by_code(
     cwd: &Path,
+    state_dir: Option<&Path>,
     code: &str,
 ) -> Result<Option<(PathBuf, PersistentState)>> {
     let mut matches = Vec::new();
-    for (state_path, state) in list_saved_tunnels(cwd)? {
+    for (state_path, state) in list_saved_tunnels(cwd, state_dir)? {
         if !state.config.temporary || state.config.code != code {
             continue;
         }
@@ -1197,9 +1242,9 @@ fn find_live_temporary_state_by_code(
     }
 }
 
-fn live_tunnel_names(cwd: &Path) -> Result<Vec<String>> {
+fn live_tunnel_names(cwd: &Path, state_dir: Option<&Path>) -> Result<Vec<String>> {
     let mut names = Vec::new();
-    for (state_path, state) in list_saved_tunnels(cwd)? {
+    for (state_path, state) in list_saved_tunnels(cwd, state_dir)? {
         if matches!(
             current_tunnel_runtime(&state_path)?,
             ResolvedTunnelRuntime::Live(_)
@@ -1213,6 +1258,7 @@ fn live_tunnel_names(cwd: &Path) -> Result<Vec<String>> {
 
 pub fn resolve_state_path(
     explicit: Option<&Path>,
+    state_dir: Option<&Path>,
     cwd: &Path,
     config: &PersistentConfig,
 ) -> Result<PathBuf> {
@@ -1221,21 +1267,7 @@ pub fn resolve_state_path(
     }
 
     let file_name = state_file_name(config)?;
-    let project_path = project_state_dir(cwd).join(&file_name);
-    if project_path.exists() {
-        return Ok(project_path);
-    }
-
-    let user_path = user_state_dir()?.join(file_name);
-    if user_path.exists() {
-        return Ok(user_path);
-    }
-
-    if dir_is_writable(cwd) {
-        return Ok(project_path);
-    }
-
-    Ok(user_path)
+    Ok(configured_state_dir(cwd, state_dir)?.join(file_name))
 }
 
 pub fn load_matching_state(path: &Path, expected: &PersistentConfig) -> Result<PersistentState> {
@@ -1244,12 +1276,13 @@ pub fn load_matching_state(path: &Path, expected: &PersistentConfig) -> Result<P
     Ok(state)
 }
 
-fn list_saved_tunnels(cwd: &Path) -> Result<Vec<(PathBuf, PersistentState)>> {
+fn list_saved_tunnels(
+    cwd: &Path,
+    state_dir: Option<&Path>,
+) -> Result<Vec<(PathBuf, PersistentState)>> {
     let mut entries = Vec::new();
-    for dir in [project_state_dir(cwd), user_state_dir()?] {
-        if !dir.exists() {
-            continue;
-        }
+    let dir = configured_state_dir(cwd, state_dir)?;
+    if dir.exists() {
         for entry in fs::read_dir(&dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -1354,6 +1387,14 @@ pub fn project_state_dir(cwd: &Path) -> PathBuf {
     cwd.join(".tunnelworm")
 }
 
+fn configured_state_dir(cwd: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
+    match explicit {
+        Some(path) if path.is_absolute() => Ok(path.to_path_buf()),
+        Some(path) => Ok(cwd.join(path)),
+        None => user_state_dir(),
+    }
+}
+
 pub fn user_state_dir() -> Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -1393,14 +1434,6 @@ pub fn user_state_dir() -> Result<PathBuf> {
             .join("state")
             .join("tunnelworm"))
     }
-}
-
-fn dir_is_writable(path: &Path) -> bool {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(_) => return false,
-    };
-    !metadata.permissions().readonly()
 }
 
 fn write_with_restrictive_permissions(path: &Path, bytes: Vec<u8>) -> Result<()> {
@@ -1755,9 +1788,13 @@ mod tests {
         let mut fixture = Fixture::new("resolve-by-code");
         let first = fixture.write_live_state("tmp-connect-one", "9-regression-parsnip");
 
-        let (resolved_path, resolved_state, correction) =
-            resolve_live_tunnel_handle(None, Some("9-regression-parsnip"), fixture.cwd())
-                .expect("shared code should resolve");
+        let (resolved_path, resolved_state, correction) = resolve_live_tunnel_handle(
+            None,
+            Some(fixture.state_dir()),
+            Some("9-regression-parsnip"),
+            fixture.cwd(),
+        )
+        .expect("shared code should resolve");
 
         assert_eq!(resolved_path, first.path);
         assert_eq!(resolved_state.config.name, "tmp-connect-one");
@@ -1773,8 +1810,13 @@ mod tests {
         fixture.write_live_state("tmp-connect-one", "9-regression-ambiguous");
         fixture.write_live_state("tmp-listen-two", "9-regression-ambiguous");
 
-        let error = resolve_live_tunnel_handle(None, Some("9-regression-ambiguous"), fixture.cwd())
-            .expect_err("ambiguous code should fail");
+        let error = resolve_live_tunnel_handle(
+            None,
+            Some(fixture.state_dir()),
+            Some("9-regression-ambiguous"),
+            fixture.cwd(),
+        )
+        .expect_err("ambiguous code should fail");
 
         assert!(
             error
@@ -1789,8 +1831,13 @@ mod tests {
         let fixture = Fixture::new("resolve-dead-name");
         fixture.write_dead_state("tmp-dead-one", "9-regression-dead");
 
-        let error = resolve_live_tunnel_handle(None, Some("tmp-dead-one"), fixture.cwd())
-            .expect_err("dead temporary tunnel name should not resolve");
+        let error = resolve_live_tunnel_handle(
+            None,
+            Some(fixture.state_dir()),
+            Some("tmp-dead-one"),
+            fixture.cwd(),
+        )
+        .expect_err("dead temporary tunnel name should not resolve");
 
         assert!(
             error
@@ -1805,8 +1852,14 @@ mod tests {
         let mut fixture = Fixture::new("resolve-missing-handle");
         fixture.write_live_state("office-ssh", "9-regression-live");
 
-        let error = resolve_live_tunnel_target(None, None, fixture.cwd(), "pipe over")
-            .expect_err("missing handle should fail");
+        let error = resolve_live_tunnel_target(
+            None,
+            Some(fixture.state_dir()),
+            None,
+            fixture.cwd(),
+            "pipe over",
+        )
+        .expect_err("missing handle should fail");
 
         assert!(
             error
@@ -1844,6 +1897,7 @@ mod tests {
     struct Fixture {
         root: PathBuf,
         cwd: PathBuf,
+        state_dir: PathBuf,
         socket_paths: Vec<PathBuf>,
     }
 
@@ -1860,16 +1914,22 @@ mod tests {
             let root =
                 std::env::temp_dir().join(format!("tunnelworm-persistent-test-{label}-{unique}"));
             let cwd = root.join("cwd");
-            fs::create_dir_all(project_state_dir(&cwd)).expect("project state dir should exist");
+            let state_dir = project_state_dir(&cwd);
+            fs::create_dir_all(&state_dir).expect("project state dir should exist");
             Self {
                 root,
                 cwd,
+                state_dir,
                 socket_paths: Vec::new(),
             }
         }
 
         fn cwd(&self) -> &Path {
             &self.cwd
+        }
+
+        fn state_dir(&self) -> &Path {
+            &self.state_dir
         }
 
         fn write_live_state(&mut self, name: &str, code: &str) -> StateHandle {
@@ -1890,7 +1950,8 @@ mod tests {
                 policy_rules: Vec::new(),
             };
             let state = PersistentState::new(config.clone(), persistent_auth::generate_identity());
-            let path = project_state_dir(&self.cwd)
+            let path = self
+                .state_dir
                 .join(state_file_name(&config).expect("state file name should render"));
             save_state(&path, &state).expect("state should save");
             fs::write(
@@ -1972,7 +2033,8 @@ mod tests {
                 policy_rules: Vec::new(),
             };
             let state = PersistentState::new(config.clone(), persistent_auth::generate_identity());
-            let path = project_state_dir(&self.cwd)
+            let path = self
+                .state_dir
                 .join(state_file_name(&config).expect("state file name should render"));
             save_state(&path, &state).expect("state should save");
             StateHandle { path }

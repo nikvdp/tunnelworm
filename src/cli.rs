@@ -562,6 +562,7 @@ pub struct TunnelConfig {
     pub mailbox: Option<String>,
     pub code_length: usize,
     pub code: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub policy_rules: Vec<TunnelPolicyRule>,
     pub locals: Vec<LocalSpec>,
     pub remotes: Vec<RemoteSpec>,
@@ -572,24 +573,28 @@ pub struct TunnelConfig {
 #[derive(Debug, Clone)]
 pub struct TunnelStatusConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub state: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TunnelUpConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub state: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TunnelDeleteConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub state: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TunnelPipeConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub state: Option<PathBuf>,
     pub mode: Option<crate::pipe::PipeMode>,
 }
@@ -597,6 +602,7 @@ pub struct TunnelPipeConfig {
 #[derive(Debug, Clone)]
 pub struct TunnelShellConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub state: Option<PathBuf>,
     pub command: Option<String>,
 }
@@ -604,12 +610,14 @@ pub struct TunnelShellConfig {
 #[derive(Debug, Clone)]
 pub struct TunnelPortsListConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub state: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TunnelPortsAddConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub state: Option<PathBuf>,
     pub local_listen: Option<String>,
     pub local_connect: Option<String>,
@@ -620,6 +628,7 @@ pub struct TunnelPortsAddConfig {
 #[derive(Debug, Clone)]
 pub struct TunnelPortsRemoveConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub state: Option<PathBuf>,
     pub id: Option<u32>,
 }
@@ -627,9 +636,15 @@ pub struct TunnelPortsRemoveConfig {
 #[derive(Debug, Clone)]
 pub struct TunnelSendFileConfig {
     pub name: Option<String>,
+    pub state_dir: Option<PathBuf>,
     pub source: Option<PathBuf>,
     pub destination: Option<PathBuf>,
     pub overwrite: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TunnelListConfig {
+    pub state_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -647,7 +662,7 @@ pub enum TunnelwormInvocation {
     Shell(TunnelShellConfig),
     TunnelCreate(TunnelConfig),
     TunnelUp(TunnelUpConfig),
-    TunnelList,
+    TunnelList(TunnelListConfig),
     TunnelStatus(TunnelStatusConfig),
     TunnelDelete(TunnelDeleteConfig),
 }
@@ -801,6 +816,12 @@ pub struct CommonSessionArgs {
         help = "Number of words to allocate when creating a new code"
     )]
     pub code_length: usize,
+    #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
     #[command(flatten)]
     pub policy: PolicyArgs,
     #[command(flatten)]
@@ -833,6 +854,12 @@ pub struct TunnelOpenArgs {
         help = "Number of words to allocate when creating a new code"
     )]
     pub code_length: usize,
+    #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
     #[command(flatten)]
     pub policy: PolicyArgs,
     #[arg(
@@ -899,6 +926,12 @@ pub struct TunnelUpArgs {
     )]
     pub name: Option<String>,
     #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
+    #[arg(
         long = "state",
         value_name = "PATH",
         required_unless_present = "name",
@@ -918,6 +951,12 @@ pub struct TunnelStatusArgs {
     )]
     pub name: Option<String>,
     #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
+    #[arg(
         long = "state",
         value_name = "PATH",
         required_unless_present = "name",
@@ -929,7 +968,14 @@ pub struct TunnelStatusArgs {
 #[derive(Debug, Clone, Args)]
 #[command(about = "List saved persistent tunnel endpoints")]
 #[command(after_long_help = TUNNEL_LIST_AFTER_HELP)]
-pub struct TunnelListArgs {}
+pub struct TunnelListArgs {
+    #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
+}
 
 #[derive(Debug, Clone, Args)]
 #[command(about = "Delete one saved persistent tunnel endpoint")]
@@ -941,6 +987,12 @@ pub struct TunnelDeleteArgs {
         help = "Local name of the saved tunnel endpoint to delete"
     )]
     pub name: Option<String>,
+    #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
     #[arg(
         long = "state",
         value_name = "PATH",
@@ -959,6 +1011,12 @@ pub struct TunnelPipeArgs {
         help = "Local name of the saved tunnel endpoint to use"
     )]
     pub name: Option<String>,
+    #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
     #[arg(
         long = "state",
         value_name = "PATH",
@@ -987,6 +1045,12 @@ pub struct TunnelPortsListArgs {
     )]
     pub name: Option<String>,
     #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
+    #[arg(
         long = "state",
         value_name = "PATH",
         help = "Use an explicit persistent state file path"
@@ -1001,6 +1065,12 @@ pub struct TunnelPortsAddArgs {
         help = "Local name of the saved tunnel endpoint to use"
     )]
     pub name: Option<String>,
+    #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
     #[arg(
         long = "state",
         value_name = "PATH",
@@ -1043,6 +1113,12 @@ pub struct TunnelPortsRemoveArgs {
     #[arg(value_name = "ID", help = "Numeric port-forward ID to remove")]
     pub id: Option<u32>,
     #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
+    #[arg(
         long = "state",
         value_name = "PATH",
         help = "Use an explicit persistent state file path"
@@ -1075,6 +1151,12 @@ pub struct TunnelPortsArgs {
     )]
     pub name: Option<String>,
     #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
+    #[arg(
         long = "state",
         value_name = "PATH",
         help = "Use an explicit persistent state file path"
@@ -1091,6 +1173,12 @@ pub struct TunnelSendFileArgs {
         help = "Local name of the saved tunnel endpoint to use"
     )]
     pub name: Option<String>,
+    #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
     #[arg(value_name = "SOURCE", help = "Local file to send to the peer")]
     pub source: Option<PathBuf>,
     #[arg(
@@ -1116,6 +1204,12 @@ pub struct TunnelShellArgs {
         help = "Local name of the saved tunnel endpoint to use"
     )]
     pub name: Option<String>,
+    #[arg(
+        long = "state-dir",
+        value_name = "PATH",
+        help = "Override the default tunnel state directory"
+    )]
+    pub state_dir: Option<PathBuf>,
     #[arg(
         long = "state",
         value_name = "PATH",
@@ -1218,6 +1312,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                 mailbox: args.mailbox,
                 code_length: args.code_length,
                 code: args.code,
+                state_dir: args.state_dir,
                 policy_rules: args.policy.ordered_rules,
                 locals: Vec::new(),
                 remotes: Vec::new(),
@@ -1227,6 +1322,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
             Some(TunnelwormSubcommand::SelfUpdate(_)) => Ok(Self::SelfUpdate),
             Some(TunnelwormSubcommand::Pipe(args)) => Ok(Self::Pipe(TunnelPipeConfig {
                 name: args.name,
+                state_dir: args.state_dir,
                 state: args.state,
                 mode: if args.send {
                     Some(crate::pipe::PipeMode::Send)
@@ -1239,16 +1335,19 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
             Some(TunnelwormSubcommand::Ports(args)) => match args.command {
                 None => Ok(Self::PortsList(TunnelPortsListConfig {
                     name: args.name,
+                    state_dir: args.state_dir,
                     state: args.state,
                 })),
                 Some(TunnelPortsSubcommand::List(list)) => {
                     Ok(Self::PortsList(TunnelPortsListConfig {
                         name: list.name,
+                        state_dir: list.state_dir,
                         state: list.state,
                     }))
                 }
                 Some(TunnelPortsSubcommand::Add(add)) => Ok(Self::PortsAdd(TunnelPortsAddConfig {
                     name: add.name,
+                    state_dir: add.state_dir,
                     state: add.state,
                     local_listen: add.local_listen,
                     local_connect: add.local_connect,
@@ -1258,6 +1357,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                 Some(TunnelPortsSubcommand::Remove(remove)) => {
                     Ok(Self::PortsRemove(TunnelPortsRemoveConfig {
                         name: remove.name,
+                        state_dir: remove.state_dir,
                         state: remove.state,
                         id: remove.id,
                     }))
@@ -1266,6 +1366,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
             Some(TunnelwormSubcommand::SendFile(args)) => {
                 Ok(Self::SendFile(TunnelSendFileConfig {
                     name: args.name,
+                    state_dir: args.state_dir,
                     source: args.source,
                     destination: args.destination,
                     overwrite: args.overwrite,
@@ -1273,6 +1374,7 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
             }
             Some(TunnelwormSubcommand::Shell(args)) => Ok(Self::Shell(TunnelShellConfig {
                 name: args.name,
+                state_dir: args.state_dir,
                 state: args.state,
                 command: args.command,
             })),
@@ -1290,15 +1392,20 @@ impl TryFrom<TunnelwormCli> for TunnelwormInvocation {
                 }
                 TunnelCommand::Up(args) => Ok(Self::TunnelUp(TunnelUpConfig {
                     name: args.name,
+                    state_dir: args.state_dir,
                     state: args.state,
                 })),
-                TunnelCommand::List(_) => Ok(Self::TunnelList),
+                TunnelCommand::List(args) => Ok(Self::TunnelList(TunnelListConfig {
+                    state_dir: args.state_dir,
+                })),
                 TunnelCommand::Status(args) => Ok(Self::TunnelStatus(TunnelStatusConfig {
                     name: args.name,
+                    state_dir: args.state_dir,
                     state: args.state,
                 })),
                 TunnelCommand::Delete(args) => Ok(Self::TunnelDelete(TunnelDeleteConfig {
                     name: args.name,
+                    state_dir: args.state_dir,
                     state: args.state,
                 })),
             },
@@ -1333,6 +1440,7 @@ fn build_config(
         mailbox: common.mailbox,
         code_length: common.code_length,
         code,
+        state_dir: common.state_dir,
         policy_rules: common.policy.ordered_rules,
         locals,
         remotes,
